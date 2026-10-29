@@ -372,6 +372,7 @@ body[data-theme="night"] .rd-pages canvas { filter: invert(.9) hue-rotate(180deg
 .rd-loading { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 12px; background: var(--bg); z-index: 30; color: var(--ink-2); font-size: 14px; }
 
 ::selection { background: rgba(var(--hl-base), .45); }
+@media (pointer: coarse) { .rd-content { -webkit-user-select: none; user-select: none; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 
 /* ===================== DESKTOP ===================== */

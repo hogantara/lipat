@@ -102,10 +102,12 @@ export class Reader {
     // So the moment the finger lifts we take the range ourselves, drop the native selection, paint a
     // provisional highlight and show only our bubble. Drag to extend before lifting; tap away to cancel.
     this.scroller.addEventListener('touchend', () => setTimeout(() => this._takeSelection(), 0));
+    if (isTouch()) this._wireTouchSelection();
     this.scroller.addEventListener('scroll', () => { if (this.pending) this._positionBubble(this._pendingRects()); }, { passive: true });
 
     // clicks in content
     this.content.addEventListener('click', (ev) => {
+      if (Date.now() - (this._selEndAt || 0) < 500) { ev.preventDefault(); return; }
       const mark = ev.target.closest('mark.hl');
       if (mark && mark.classList.contains('pending')) { ev.preventDefault(); return; }
       if (this.pending) { ev.preventDefault(); this.hideBubble(); return; }
@@ -439,7 +441,82 @@ export class Reader {
     document.body.classList.remove('chrome-hidden');
   }
 
-  // Take the native selection into a provisional highlight (touch only).
+  // Touch: Dogear runs the selection itself. The reading surface has user-select: none on coarse
+  // pointers, so Chrome never starts a native selection (and never shows its toolbar or Touch to
+  // Search). Long-press picks the word under the finger, dragging extends by whole words, lifting
+  // shows the bubble. Everything is tracked as character offsets inside the section, which stay
+  // valid while the provisional <mark> splits and re-joins text nodes underneath.
+  _wireTouchSelection() {
+    const c = this.content;
+    let t0 = null, timer = null, selecting = false, anchor = null, raf = 0, lastPt = null;
+    const pt = (ev) => ev.touches[0] || ev.changedTouches[0];
+    c.addEventListener('contextmenu', (ev) => ev.preventDefault());
+    c.addEventListener('touchstart', (ev) => {
+      if (ev.touches.length !== 1 || this.pageMode) return;
+      const p = pt(ev); t0 = { x: p.clientX, y: p.clientY };
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const at = this._offsetAt(t0.x, t0.y); if (!at) return;
+        const w = this._wordAround(at.secEl, at.off); if (!w) return;
+        selecting = true; anchor = { ...at, ...w };
+        this.hideBubble();
+        this._setPending(anchor.sid, w.start, w.end, anchor.node);
+        if (navigator.vibrate) navigator.vibrate(12);
+      }, 420);
+    }, { passive: true });
+    c.addEventListener('touchmove', (ev) => {
+      const p = pt(ev);
+      if (!selecting) { if (t0 && Math.hypot(p.clientX - t0.x, p.clientY - t0.y) > 8) clearTimeout(timer); return; }
+      ev.preventDefault();
+      lastPt = { x: p.clientX, y: p.clientY };
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const at = this._offsetAt(lastPt.x, lastPt.y); if (!at || at.sid !== anchor.sid) return;
+        const w = this._wordAround(at.secEl, at.off) || { start: at.off, end: at.off };
+        this._setPending(anchor.sid, Math.min(anchor.start, w.start), Math.max(anchor.end, w.end), anchor.node);
+      });
+    }, { passive: false });
+    const end = () => {
+      clearTimeout(timer); timer = null; t0 = null;
+      if (!selecting) return;
+      selecting = false; anchor = null; this._selEndAt = Date.now();
+      if (this.pending) { this._positionBubble(this._pendingRects()); document.body.classList.remove('chrome-hidden'); }
+    };
+    c.addEventListener('touchend', end, { passive: true });
+    c.addEventListener('touchcancel', end, { passive: true });
+  }
+  _offsetAt(x, y) {
+    let node, offset;
+    if (document.caretRangeFromPoint) { const r = document.caretRangeFromPoint(x, y); if (!r) return null; node = r.startContainer; offset = r.startOffset; }
+    else if (document.caretPositionFromPoint) { const c = document.caretPositionFromPoint(x, y); if (!c) return null; node = c.offsetNode; offset = c.offset; }
+    else return null;
+    if (!node || node.nodeType !== 3) return null;
+    const el = node.parentNode; if (!this.content.contains(el)) return null;
+    const secEl = el.closest('section[data-sid]'); if (!secEl) return null;
+    const pre = document.createRange(); pre.selectNodeContents(secEl); pre.setEnd(node, offset);
+    return { sid: secEl.dataset.sid, secEl, node, off: pre.toString().length };
+  }
+  _wordAround(secEl, off) {
+    const t = secEl.textContent;
+    const w = (ch) => !!ch && /[\p{L}\p{N}\u2019'-]/u.test(ch);
+    let s = off, e = off;
+    while (s > 0 && w(t[s - 1])) s--;
+    while (e < t.length && w(t[e])) e++;
+    return s < e ? { start: s, end: e } : null;
+  }
+  _setPending(sid, start, end, node) {
+    if (this.pending && this.pending.sectionId === sid && this.pending.start === start && this.pending.end === end) return;
+    const secEl = this.sectionEls.get(sid); if (!secEl) return;
+    const raw = secEl.textContent.slice(start, end);
+    const lead = raw.length - raw.trimStart().length, clean = raw.trim();
+    if (!clean) return;
+    this._clearPending();
+    this.pending = { sectionId: sid, start: start + lead, end: start + lead + clean.length, text: clean.replace(/\s+/g, ' '), page: node ? this._pageAtNode(node) : null };
+    this.pendingEls = wrapTextRange(secEl, this.pending.start, this.pending.end, () => { const mk = document.createElement('mark'); mk.className = 'hl pending'; mk.dataset.emoji = ''; mk.dataset.note = '0'; return mk; });
+  }
+
+  // Take a native selection into a provisional highlight (touch only; fallback if one exists).
   _takeSelection() {
     if (!this.book || this.pageMode) return;
     if (!isTouch()) { this._onSelectionChange(true); return; }
@@ -468,7 +545,9 @@ export class Reader {
   _selectionToMark() {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
-    const range = sel.getRangeAt(0);
+    return this._rangeToLoc(sel.getRangeAt(0));
+  }
+  _rangeToLoc(range) {
     let node = range.startContainer;
     const secEl = (node.nodeType === 1 ? node : node.parentNode).closest('section[data-sid]');
     if (!secEl) return null;

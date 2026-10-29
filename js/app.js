@@ -5,6 +5,7 @@ import { Reader, EMOJIS, DEFAULT_PREFS, applyPrefs, isMobile } from './reader.js
 import { Drive, DriveError } from './drive.js';
 import { bookMarkdown, reactionMarkdown, indexMarkdown, allMarksMarkdown, safeName, REACTIONS } from './export.js';
 import { GOOGLE_CLIENT_ID } from './config.js';
+export const BUILD = '2026-10-29.3';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -392,6 +393,7 @@ async function drainInbox() {
 }
 if ('launchQueue' in window) window.launchQueue.setConsumer(async (p) => { if (p.files?.length) importFiles(await Promise.all(p.files.map(h => h.getFile()))); });
 function renderStorage() {
+  $('#build-info').textContent = 'Dogear build ' + BUILD;
   const el = $('#storage-info');
   const n = state.books.length;
   el.textContent = `${n} book${n === 1 ? '' : 's'} and ${state.marks.length} mark${state.marks.length === 1 ? '' : 's'} stored in this browser.`;
