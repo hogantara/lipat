@@ -16,9 +16,12 @@
   "iconUrl": "https://hogantara.github.io/dogear/icons/icon-512.png",
   "maskableIconUrl": "https://hogantara.github.io/dogear/icons/icon-512.png",
   "splashScreenFadeOutDuration": 300,
-  "signingKey": { "path": "./android.keystore", "alias": "dogear" },
-  "appVersionName": "1.0",
-  "appVersionCode": 1,
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "dogear"
+  },
+  "appVersionName": "1.0.1",
+  "appVersionCode": 2,
   "shortcuts": [],
   "generatorApp": "bubblewrap-cli",
   "webManifestUrl": "https://hogantara.github.io/dogear/manifest.webmanifest",
@@ -29,16 +32,36 @@
   "fingerprints": [],
   "additionalTrustedOrigins": [],
   "retainedBundles": [],
-  "appVersion": "1.0",
+  "appVersion": "1.0.1",
   "minSdkVersion": 24,
   "features": {},
-  "alphaDependencies": { "enabled": false },
+  "alphaDependencies": {
+    "enabled": false
+  },
   "enableSiteSettingsShortcut": true,
   "fallbackType": "customtabs",
   "shareTarget": {
     "action": "/dogear/share-target",
     "method": "POST",
     "enctype": "multipart/form-data",
-    "params": { "title": "title", "text": "text", "url": "url", "files": [ { "name": "files", "accept": [ "application/pdf", ".pdf", "application/epub+zip", ".epub", ".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "text/plain", ".txt", "text/markdown", ".md", "text/html", ".html" ] } ] }
+    "params": {
+      "title": "title",
+      "text": "text",
+      "url": "url",
+      "files": [
+        {
+          "name": "files",
+          "accept": [
+            "application/pdf",
+            "application/epub+zip",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "text/plain",
+            "text/markdown",
+            "text/html",
+            "application/octet-stream"
+          ]
+        }
+      ]
+    }
   }
 }

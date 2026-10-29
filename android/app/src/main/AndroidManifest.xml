@@ -152,27 +152,17 @@
                     
                         <data android:mimeType="application/pdf" />
                     
-                        <data android:mimeType=".pdf" />
-                    
                         <data android:mimeType="application/epub+zip" />
-                    
-                        <data android:mimeType=".epub" />
-                    
-                        <data android:mimeType=".docx" />
                     
                         <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
                     
                         <data android:mimeType="text/plain" />
                     
-                        <data android:mimeType=".txt" />
-                    
                         <data android:mimeType="text/markdown" />
-                    
-                        <data android:mimeType=".md" />
                     
                         <data android:mimeType="text/html" />
                     
-                        <data android:mimeType=".html" />
+                        <data android:mimeType="application/octet-stream" />
                     
                 </intent-filter>
             
