@@ -116,4 +116,4 @@ bubblewrap build --skipPwaValidation
 
 Outputs `app-release-signed.apk` (sideload, also copied to `download/` on the site) and `app-release-bundle.aab` (Play Console). Bump `appVersionCode` and `appVersion` in `twa-manifest.json` before each release (share-target `accept` must list MIME types only, never extensions, or Android refuses to install), then run `bubblewrap update --skipVersionUpgrade` and build again.
 
-`android/android.keystore` and `android/signing.txt` are the signing key and its password. They are gitignored. Keep a backup: Play updates must be signed with the same key. The key's SHA-256 fingerprint is published at `.well-known/assetlinks.json` so Android trusts the site and hides the browser bar.
+`android/android.keystore` and `android/signing.txt` are the signing key and its password. They are gitignored. Keep a backup: Play updates must be signed with the same key. The key's SHA-256 fingerprint is published at `https://hogantara.github.io/.well-known/assetlinks.json` (repo `hogantara/hogantara.github.io`, the domain root; Android ignores a copy under `/dogear/`). Without it the app opens with a browser bar on top.
