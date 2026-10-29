@@ -265,6 +265,7 @@ body.chrome-hidden .rd-bottom { opacity: 0; transform: translateY(8px); pointer-
 
 .rd-content mark.hl { background: rgba(var(--hl-base), .38); color: inherit; border-radius: 2px; padding: .05em 0; box-decoration-break: clone; -webkit-box-decoration-break: clone; cursor: pointer; transition: background .15s; }
 .rd-content mark.hl:hover, .rd-content mark.hl.is-active { background: rgba(var(--hl-base), .7); }
+.rd-content mark.hl.pending { background: rgba(var(--hl-base), .5); cursor: default; }
 .rd-content mark.hl[data-emoji="💡"] { background: rgba(255,214,102,.4); }
 .rd-content mark.hl[data-emoji="❤️"] { background: rgba(255,138,150,.38); }
 .rd-content mark.hl[data-emoji="🤔"] { background: rgba(130,190,255,.4); }

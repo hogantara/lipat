@@ -47,7 +47,7 @@ export class Reader {
     this.slider = $('#rd-slider');
     this.book = null; this.marks = []; this.sectionEls = new Map(); this.textCache = new Map();
     this.pageMode = false; this.pdf = null; this.zoom = 1; this.pageObserver = null;
-    this.editingMark = null; this.lastScroll = 0; this.saveTimer = null;
+    this.editingMark = null; this.lastScroll = 0; this.saveTimer = null; this.pending = null; this.pendingEls = null;
     this._wire();
   }
 
@@ -81,7 +81,7 @@ export class Reader {
     rows.forEach(row => { row.innerHTML = EMOJIS.map(x => `<button data-emoji="${x.e}" data-label="${x.label}" title="${x.label}">${x.e}</button>`).join(''); });
     $('.emoji-row', this.bubble).onclick = (ev) => { const b = ev.target.closest('button'); if (b) this.keepSelection(b.dataset.emoji); };
     $('.bubble-note', this.bubble).onclick = () => this.keepSelection(null, true);
-    $('.bubble-copy', this.bubble).onclick = async () => { const t = window.getSelection().toString().trim(); try { await navigator.clipboard.writeText(t); this.toast('Copied'); } catch { this.toast('Copy blocked by browser'); } window.getSelection().removeAllRanges(); this.bubble.hidden = true; };
+    $('.bubble-copy', this.bubble).onclick = async () => { const t = this.pending ? this.pending.text : window.getSelection().toString().trim(); try { await navigator.clipboard.writeText(t); this.toast('Copied'); } catch { this.toast('Copy blocked by browser'); } window.getSelection().removeAllRanges(); this.hideBubble(); };
     $('.emoji-row', this.editor).onclick = (ev) => {
       const b = ev.target.closest('button'); if (!b || !this.editingMark) return;
       const m = this.editingMark;
@@ -98,11 +98,17 @@ export class Reader {
       if (isTouch()) { clearTimeout(this._selT); this._selT = setTimeout(() => this._onSelectionChange(true), 500); }
     });
     this.scroller.addEventListener('mouseup', () => setTimeout(() => this._onSelectionChange(true), 10));
-    this.scroller.addEventListener('touchend', () => setTimeout(() => this._onSelectionChange(true), 350));
+    // On touch, Chrome's own selection toolbar and Touch to Search ride on the native selection.
+    // So the moment the finger lifts we take the range ourselves, drop the native selection, paint a
+    // provisional highlight and show only our bubble. Drag to extend before lifting; tap away to cancel.
+    this.scroller.addEventListener('touchend', () => setTimeout(() => this._takeSelection(), 0));
+    this.scroller.addEventListener('scroll', () => { if (this.pending) this._positionBubble(this._pendingRects()); }, { passive: true });
 
     // clicks in content
     this.content.addEventListener('click', (ev) => {
       const mark = ev.target.closest('mark.hl');
+      if (mark && mark.classList.contains('pending')) { ev.preventDefault(); return; }
+      if (this.pending) { ev.preventDefault(); this.hideBubble(); return; }
       if (mark) { ev.preventDefault(); const m = this.marks.find(x => x.id === mark.dataset.id); if (m) this.openEditor(m, mark); return; }
       const a = ev.target.closest('a[data-epub-target]');
       if (a) { ev.preventDefault(); this.gotoEpubTarget(a.dataset.epubTarget); return; }
@@ -145,7 +151,7 @@ export class Reader {
 
     // keyboard
     document.addEventListener('keydown', (ev) => this._onKey(ev));
-    window.addEventListener('resize', () => { this.bubble.hidden = true; if (this.pageMode) this._layoutPages(); });
+    window.addEventListener('resize', () => { this.hideBubble(); if (this.pageMode) this._layoutPages(); });
   }
 
   // ------------------------------------------------------------ open / close
@@ -156,7 +162,7 @@ export class Reader {
     $('#rd-book-title').textContent = book.title;
     $('#rd-chapter').textContent = '';
     document.body.classList.remove('chrome-hidden');
-    this.closeEditor(); this.bubble.hidden = true; this.panel.hidden = true; this.typePop.hidden = true;
+    this.closeEditor(); this.hideBubble(); this.panel.hidden = true; this.typePop.hidden = true;
     this.marks = await db.marksForBook(book.id);
     this.textCache.clear();
     await nextFrame();
@@ -264,7 +270,7 @@ export class Reader {
       else if (dy < 0) document.body.classList.remove('chrome-hidden');
     }
     this.lastScroll = st;
-    this.bubble.hidden = true;
+    if (!this.pending) this.bubble.hidden = true;
     this._updateMeta();
     this._savePosition();
   }
@@ -410,15 +416,18 @@ export class Reader {
   _onSelectionChange(force = false) {
     if (!this.book || this.pageMode) return;
     const sel = window.getSelection();
+    if (this.pending && (!sel || sel.isCollapsed)) return;
     if (!sel || sel.isCollapsed || !sel.rangeCount) { this.bubble.hidden = true; return; }
     const range = sel.getRangeAt(0);
     if (!this.content.contains(range.commonAncestorContainer)) { this.bubble.hidden = true; return; }
     if (!range.toString().trim()) { this.bubble.hidden = true; return; }
     // only show once the mouse is released (mouseup/touchend call with force)
     if (!force && this.bubble.hidden) return;
-    const rects = range.getClientRects();
-    const r = rects.length ? rects[0] : range.getBoundingClientRect();
-    const last = rects.length ? rects[rects.length - 1] : r;
+    this._positionBubble(range.getClientRects().length ? range.getClientRects() : [range.getBoundingClientRect()]);
+  }
+  _positionBubble(rects) {
+    if (!rects || !rects.length) return;
+    const r = rects[0], last = rects[rects.length - 1];
     const vr = this.view.getBoundingClientRect();
     this.bubble.hidden = false;
     const bw = this.bubble.offsetWidth, bh = this.bubble.offsetHeight;
@@ -429,6 +438,32 @@ export class Reader {
     this.bubble.style.left = x + 'px'; this.bubble.style.top = y + 'px';
     document.body.classList.remove('chrome-hidden');
   }
+
+  // Take the native selection into a provisional highlight (touch only).
+  _takeSelection() {
+    if (!this.book || this.pageMode) return;
+    if (!isTouch()) { this._onSelectionChange(true); return; }
+    const loc = this._selectionToMark();
+    if (!loc) return;
+    this.hideBubble();
+    this.pending = loc;
+    const el = this.sectionEls.get(loc.sectionId);
+    this.pendingEls = wrapTextRange(el, loc.start, loc.end, () => { const mk = document.createElement('mark'); mk.className = 'hl pending'; mk.dataset.emoji = ''; mk.dataset.note = '0'; return mk; });
+    window.getSelection().removeAllRanges();
+    this._positionBubble(this._pendingRects());
+    document.body.classList.remove('chrome-hidden');
+  }
+  _pendingRects() {
+    const els = this.pendingEls || []; if (!els.length) return [];
+    const a = els[0].getClientRects(), b = els[els.length - 1].getClientRects();
+    return [a[0] || els[0].getBoundingClientRect(), b[b.length - 1] || els[els.length - 1].getBoundingClientRect()];
+  }
+  _clearPending() {
+    if (!this.pending) return;
+    for (const mk of this.pendingEls || []) { const p = mk.parentNode; if (!p) continue; while (mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); }
+    this.pending = null; this.pendingEls = null;
+  }
+  hideBubble() { this.bubble.hidden = true; this._clearPending(); }
 
   _selectionToMark() {
     const sel = window.getSelection();
@@ -458,11 +493,11 @@ export class Reader {
   }
 
   async keepSelection(emoji, openNote = false) {
-    const loc = this._selectionToMark();
+    const loc = this.pending || this._selectionToMark();
     if (!loc) return;
     const mark = { id: uid(), bookId: this.book.id, type: 'highlight', emoji, note: '', createdAt: Date.now(), ...loc };
     window.getSelection().removeAllRanges();
-    this.bubble.hidden = true;
+    this.hideBubble();
     this.marks.push(mark);
     await db.putMark(mark);
     const els = this._paintMark(mark);
@@ -504,7 +539,7 @@ export class Reader {
   // ------------------------------------------------------------ editor
   openEditor(m, anchorEl, focusNote = false) {
     this.editingMark = m;
-    this.bubble.hidden = true;
+    this.hideBubble();
     $('.me-quote', this.editor).textContent = m.text;
     $('.me-quote', this.editor).hidden = m.type === 'bookmark' && !m.text;
     $('.me-note', this.editor).value = m.note || '';
@@ -587,7 +622,7 @@ export class Reader {
     const page = this.currentPage || 1;
     this.pageMode = on;
     $$('[data-act="layout"]', this.view).forEach(b => b.classList.toggle('is-on', on));
-    this.bubble.hidden = true; this.closeEditor();
+    this.hideBubble(); this.closeEditor();
     if (on) {
       $('#rd-loading').hidden = false;
       if (!this.pdf) {
@@ -668,7 +703,7 @@ export class Reader {
       if (!this.editor.hidden) { this.closeEditor(); return; }
       if (!this.typePop.hidden) { this.typePop.hidden = true; this._syncScrim(); return; }
       if (!this.panel.hidden) { this.togglePanel(null); return; }
-      if (!this.bubble.hidden) { this.bubble.hidden = true; window.getSelection().removeAllRanges(); return; }
+      if (!this.bubble.hidden) { this.hideBubble(); window.getSelection().removeAllRanges(); return; }
       this.close(); return;
     }
     if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') { ev.preventDefault(); this.togglePanel('search', true); return; }
