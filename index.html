@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Dogear</title>
+<meta name="description" content="A calm e-reader that turns what you read into what you keep.">
+<meta name="theme-color" content="#f7f3ea" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#17181c" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Dogear">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,500;0,7..72,600;0,7..72,700;1,7..72,400;1,7..72,500&family=Inter:wght@400;500;600&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body data-theme="paper">
+
+<!-- ========== LIBRARY ========== -->
+<section id="view-library" class="view">
+  <header class="lib-header">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <h1 id="lib-title">Dogear</h1>
+    </div>
+    <nav class="lib-nav desktop-only">
+      <button class="tab is-active" data-libtab="shelf">Shelf</button>
+      <button class="tab" data-libtab="marks">Marks <span class="count marks-count"></span></button>
+      <button class="tab" data-libtab="settings">Settings</button>
+    </nav>
+    <div class="lib-actions">
+      <button id="btn-theme" class="icon-btn" title="Theme (T)" aria-label="Theme">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="4.5"/><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M5.3 18.7l1.4-1.4M17.3 6.7l1.4-1.4"/></svg>
+      </button>
+      <button id="btn-add" class="btn primary desktop-only">Add books</button>
+      <input id="file-input" type="file" multiple hidden accept=".pdf,.epub,.docx,.md,.markdown,.txt,.html,.htm,application/pdf,application/epub+zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/html">
+    </div>
+  </header>
+
+  <div class="lib-body">
+    <div id="libtab-shelf" class="libtab is-active">
+      <div id="shelf" class="shelf"></div>
+      <div id="shelf-empty" class="empty" hidden>
+        <div class="empty-art" aria-hidden="true"></div>
+        <h2>Add anything readable.</h2>
+        <p>PDF, EPUB, Word, Markdown, plain text, web pages. Dogear figures out the rest.</p>
+        <button class="btn primary" id="btn-add-empty">Choose files</button>
+      </div>
+    </div>
+
+    <div id="libtab-marks" class="libtab">
+      <div class="marks-toolbar">
+        <div id="marks-emoji-filter" class="emoji-filter"></div>
+        <div class="marks-toolbar-row">
+          <input id="marks-search" type="search" placeholder="Search your marks…" class="input">
+          <select id="marks-book-filter" class="input select"><option value="">All books</option></select>
+        </div>
+      </div>
+      <div id="marks-list" class="marks-list"></div>
+      <div id="marks-empty" class="empty small" hidden>
+        <h2>Nothing kept yet.</h2>
+        <p>Select text while reading and tap a reaction. Everything you keep lands here, and in your Google Drive if you connect it.</p>
+      </div>
+    </div>
+
+    <div id="libtab-settings" class="libtab">
+      <div class="settings">
+        <section class="card">
+          <h3>Google Drive</h3>
+          <p class="muted">Your marks and notes are written as tidy Markdown files, one per book, in a <b>Dogear</b> folder in your Drive. They update automatically as you read.</p>
+          <div id="drive-status" class="drive-status"></div>
+          <div class="row-actions">
+            <button id="btn-drive-connect" class="btn primary">Connect Google Drive</button>
+            <button id="btn-drive-sync" class="btn" hidden>Sync now</button>
+            <button id="btn-drive-disconnect" class="btn danger-text" hidden>Disconnect</button>
+          </div>
+          <details id="drive-setup" class="setup">
+            <summary>Setup (one time)</summary>
+            <ol>
+              <li>Open <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">Google Cloud → APIs &amp; Services → Credentials</a>, create a project if asked.</li>
+              <li>Enable the <b>Google Drive API</b> under “Enabled APIs &amp; services”.</li>
+              <li>Create an <b>OAuth client ID</b> of type <b>Web application</b>. Add this site’s origin (<code id="origin-hint"></code>) to “Authorized JavaScript origins”.</li>
+              <li>Configure the consent screen (External, add yourself as a test user) with scope <code>drive.file</code>.</li>
+              <li>Paste the client ID below.</li>
+            </ol>
+            <label class="field"><span>OAuth client ID</span><input id="drive-client-id" class="input" placeholder="xxxx.apps.googleusercontent.com" autocomplete="off" spellcheck="false"></label>
+            <p class="muted small-text">Dogear only asks for the <code>drive.file</code> scope: it can see and edit only files it created.</p>
+          </details>
+        </section>
+        <section class="card">
+          <h3>Export</h3>
+          <p class="muted">Download everything you kept as one Markdown file.</p>
+          <button id="btn-export" class="btn">Download marks (.md)</button>
+        </section>
+        <section class="card">
+          <h3>Storage</h3>
+          <p class="muted" id="storage-info">Books live in this browser only.</p>
+          <button id="btn-install" class="btn" hidden>Install app</button>
+        </section>
+        <section class="card">
+          <h3>Keys</h3>
+          <p class="muted small-text">← → page · + − size · B bookmark · C contents · F find · L layout (PDF) · T theme · 1–5 react to selection · N note</p>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <nav class="tabbar mobile-only">
+    <button class="tb is-active" data-libtab="shelf"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M4 5h5v15H4zM10 5h5v15h-5zM16.5 5.5l4 1-3 14-4-1z"/></svg><span>Shelf</span></button>
+    <button class="tb" data-libtab="marks"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg><span>Marks</span><span class="count marks-count"></span></button>
+    <button class="tb tb-add" data-act="add"><span class="plus">+</span><span>Add</span></button>
+    <button class="tb" data-libtab="settings"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/></svg><span>Settings</span></button>
+  </nav>
+
+  <div id="drop-overlay" class="drop-overlay" hidden><div>Drop to add</div></div>
+</section>
+
+<!-- ========== READER ========== -->
+<section id="view-reader" class="view" hidden>
+  <header class="rd-top">
+    <button class="icon-btn" data-act="back" title="Library (Esc)" aria-label="Back to library">
+      <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+    </button>
+    <div class="rd-title"><span id="rd-book-title"></span><span id="rd-chapter" class="muted"></span></div>
+    <div class="rd-tools desktop-only">
+      <button class="icon-btn" data-act="layout" title="Original layout (L)" aria-label="Toggle original page layout" hidden>
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4"/></svg>
+      </button>
+      <button class="icon-btn" data-act="search" title="Search (F)" aria-label="Search in book">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/></svg>
+      </button>
+      <button class="icon-btn" data-act="bookmark" title="Bookmark this spot (B)" aria-label="Bookmark">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+      </button>
+      <button class="icon-btn" data-act="contents" title="Contents & marks (C)" aria-label="Contents">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+      </button>
+      <button class="icon-btn" data-act="type" title="Text settings (A)" aria-label="Text settings"><span class="aa">Aa</span></button>
+    </div>
+    <button class="icon-btn mobile-only" data-act="layout" title="Original layout" aria-label="Toggle original page layout" hidden>
+      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4"/></svg>
+    </button>
+  </header>
+
+  <div id="rd-scroller" class="rd-scroller" tabindex="0">
+    <article id="rd-content" class="rd-content"></article>
+    <div id="rd-pages" class="rd-pages" hidden></div>
+  </div>
+
+  <footer class="rd-bottom">
+    <div class="progress-wrap">
+      <input id="rd-slider" type="range" min="0" max="1000" value="0" aria-label="Position">
+      <div class="rd-meta"><span id="rd-pos"></span><span id="rd-left" class="muted"></span></div>
+    </div>
+    <div class="rd-tools mobile-only rd-tools-bottom">
+      <button class="icon-btn" data-act="contents" aria-label="Contents">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h10"/></svg>
+      </button>
+      <button class="icon-btn" data-act="search" aria-label="Search in book">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4-4"/></svg>
+      </button>
+      <button class="icon-btn" data-act="bookmark" aria-label="Bookmark">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M6 3h12v18l-6-4-6 4z"/></svg>
+      </button>
+      <button class="icon-btn" data-act="marks" aria-label="Marks in this book">
+        <span class="emoji-glyph">💡</span>
+      </button>
+      <button class="icon-btn" data-act="type" aria-label="Text settings"><span class="aa">Aa</span></button>
+    </div>
+  </footer>
+
+  <!-- selection bubble -->
+  <div id="sel-bubble" class="sel-bubble" hidden>
+    <div class="emoji-row"></div>
+    <button class="bubble-note" title="Keep with a note (N)">+ note</button>
+    <button class="bubble-note bubble-copy" title="Copy text">copy</button>
+  </div>
+
+  <!-- mark editor -->
+  <div id="mark-editor" class="mark-editor sheet" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="emoji-row"></div>
+    <blockquote class="me-quote"></blockquote>
+    <textarea class="me-note" placeholder="Your thought… (optional)" rows="3"></textarea>
+    <div class="me-actions">
+      <button class="btn danger-text me-delete">Remove</button>
+      <span class="spacer"></span>
+      <button class="btn me-done primary">Done</button>
+    </div>
+  </div>
+
+  <!-- side panel / bottom sheet -->
+  <aside id="panel" class="panel sheet" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="panel-tabs">
+      <button class="tab is-active" data-ptab="toc">Contents</button>
+      <button class="tab" data-ptab="marks">Marks</button>
+      <button class="tab" data-ptab="search">Search</button>
+      <span class="spacer"></span>
+      <button class="icon-btn panel-close" aria-label="Close">✕</button>
+    </div>
+    <div class="ptab is-active" data-ptab="toc"><ul id="toc-list" class="toc"></ul></div>
+    <div class="ptab" data-ptab="marks">
+      <div id="panel-emoji-filter" class="emoji-filter compact"></div>
+      <ul id="book-marks-list" class="book-marks"></ul>
+    </div>
+    <div class="ptab" data-ptab="search">
+      <input id="search-input" type="search" class="input" placeholder="Find in this book…">
+      <div id="search-summary" class="muted small-text"></div>
+      <ul id="search-results" class="search-results"></ul>
+    </div>
+  </aside>
+
+  <!-- type settings -->
+  <div id="type-pop" class="pop type-pop sheet" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <div class="row">
+      <span class="lbl">Size</span>
+      <button class="step" data-font="-1" aria-label="Smaller">A<sub>−</sub></button>
+      <input id="font-size" type="range" min="14" max="34" step="1" value="19">
+      <button class="step" data-font="1" aria-label="Larger">A<sup>+</sup></button>
+    </div>
+    <div class="row">
+      <span class="lbl">Font</span>
+      <div class="seg" id="font-family">
+        <button data-v="serif" class="is-active">Serif</button>
+        <button data-v="sans">Sans</button>
+        <button data-v="legible">Easy</button>
+      </div>
+    </div>
+    <div class="row">
+      <span class="lbl">Spacing</span>
+      <div class="seg" id="line-height">
+        <button data-v="1.45">Tight</button>
+        <button data-v="1.65" class="is-active">Normal</button>
+        <button data-v="1.9">Loose</button>
+      </div>
+    </div>
+    <div class="row desktop-only">
+      <span class="lbl">Width</span>
+      <div class="seg" id="measure">
+        <button data-v="30">Narrow</button>
+        <button data-v="36" class="is-active">Normal</button>
+        <button data-v="44">Wide</button>
+      </div>
+    </div>
+    <div class="row">
+      <span class="lbl">Theme</span>
+      <div class="seg themes" id="theme-seg">
+        <button data-v="paper" title="Paper"><i style="background:#f7f3ea"></i></button>
+        <button data-v="sepia" title="Sepia"><i style="background:#efe3c9"></i></button>
+        <button data-v="mist" title="Mist"><i style="background:#e9edf1"></i></button>
+        <button data-v="night" title="Night"><i style="background:#17181c"></i></button>
+      </div>
+    </div>
+    <div class="row">
+      <span class="lbl">Align</span>
+      <div class="seg" id="justify">
+        <button data-v="left" class="is-active">Left</button>
+        <button data-v="justify">Justify</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="rd-loading" class="rd-loading" hidden><div class="spinner"></div><div class="rd-loading-text">Opening…</div></div>
+</section>
+
+<div id="scrim" class="scrim" hidden></div>
+<div id="toast" class="toast" hidden></div>
+<div id="import-progress" class="import-progress" hidden><div class="spinner"></div><span id="import-text">Reading…</span></div>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
