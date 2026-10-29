@@ -9,3 +9,4 @@ android/local.properties
 android/*.apk
 android/*.aab
 android/*.idsig
+android/build.log

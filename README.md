@@ -100,3 +100,20 @@ Scanned PDFs with no text layer open in the original-layout view automatically.
 
 Word files that keep their text in shapes or text boxes (posters, worksheets) fall back to raw
 paragraph extraction, since mammoth skips those.
+
+## Android app
+
+`android/` holds a Trusted Web Activity wrapper (Bubblewrap) around the hosted site. It is the same app, full screen, in the Android share sheet, installable from an APK or publishable to Play.
+
+Build:
+
+```bash
+cd android
+export JAVA_HOME=~/.bubblewrap/jdk17/Contents/Home ANDROID_HOME=~/.bubblewrap/android_sdk
+export BUBBLEWRAP_KEYSTORE_PASSWORD=$(grep storepass signing.txt | cut -d= -f2) BUBBLEWRAP_KEY_PASSWORD=$BUBBLEWRAP_KEYSTORE_PASSWORD
+bubblewrap build --skipPwaValidation
+```
+
+Outputs `app-release-signed.apk` (sideload) and `app-release-bundle.aab` (Play Console). Bump `appVersionCode` and `appVersion` in `twa-manifest.json` before each release, then run `bubblewrap update --skipVersionUpgrade` and build again.
+
+`android/android.keystore` and `android/signing.txt` are the signing key and its password. They are gitignored. Keep a backup: Play updates must be signed with the same key. The key's SHA-256 fingerprint is published at `.well-known/assetlinks.json` so Android trusts the site and hides the browser bar.
