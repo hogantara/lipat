@@ -139,7 +139,7 @@ export class Reader {
     let st = null;
     si.oninput = () => { clearTimeout(st); st = setTimeout(() => this.search(si.value), 180); };
     si.onkeydown = (ev) => { if (ev.key === 'Enter') { const first = $('#search-results button'); if (first) first.click(); } };
-    $('#panel-emoji-filter').innerHTML = `<button data-f="" class="is-active" title="All">∗</button>` + EMOJIS.map(x => `<button data-f="${x.e}" title="${x.label}">${x.e}</button>`).join('') + `<button data-f="bm" title="Bookmarks">🔖</button>`;
+    $('#panel-emoji-filter').innerHTML = `<button data-f="" class="is-active" title="All"><i class="ph ph-asterisk" aria-hidden="true"></i></button>` + EMOJIS.map(x => `<button data-f="${x.e}" title="${x.label}">${x.e}</button>`).join('') + `<button data-f="bm" title="Bookmarks"><i class="ph-fill ph-bookmark-simple" aria-hidden="true"></i></button>`;
     $('#panel-emoji-filter').onclick = (ev) => { const b = ev.target.closest('button'); if (!b) return; $$('#panel-emoji-filter button').forEach(x => x.classList.toggle('is-active', x === b)); this.markFilter = b.dataset.f; this.renderMarksList(); };
     this.markFilter = '';
 
@@ -168,7 +168,7 @@ export class Reader {
     await nextFrame();
     this._restorePosition();
     $('#rd-loading').hidden = true;
-    if (book.isScanned) { this.toast('No text layer in this PDF — showing pages instead.'); this.setPageMode(true); }
+    if (book.isScanned) { this.toast('No text layer in this PDF. Showing pages instead.'); this.setPageMode(true); }
     this._onScroll();
     this.scroller.focus({ preventScroll: true });
     db.updateBook(book.id, { lastOpened: Date.now() });
@@ -340,7 +340,7 @@ export class Reader {
     const ul = $('#toc-list');
     const toc = this.book.toc || [];
     if (!toc.length) { ul.innerHTML = '<li class="empty-note">No table of contents in this book.</li>'; return; }
-    ul.innerHTML = toc.map((t, i) => `<li data-depth="${Math.min(t.depth || 0, 3)}" data-sid="${t.sectionId}"><button data-i="${i}">${esc(t.title) || '—'}${t.page ? ` <span class="muted">· ${t.page}</span>` : ''}</button></li>`).join('');
+    ul.innerHTML = toc.map((t, i) => `<li data-depth="${Math.min(t.depth || 0, 3)}" data-sid="${t.sectionId}"><button data-i="${i}">${esc(t.title) || 'Untitled'}${t.page ? `<span class="muted">${t.page}</span>` : ''}</button></li>`).join('');
     ul.onclick = (ev) => {
       const b = ev.target.closest('button'); if (!b) return;
       const t = toc[Number(b.dataset.i)];
@@ -548,7 +548,7 @@ export class Reader {
     await db.putMark(m);
     this._paintMark(m);
     this.onMarksChanged(this.book && this.book.id); this.renderMarksList();
-    this.toast('🔖 Bookmarked', { label: 'Add note', fn: () => this.openEditor(m, a.el, true) });
+    this.toast('Bookmarked', { label: 'Add note', fn: () => this.openEditor(m, a.el, true) });
     $$('[data-act="bookmark"]', this.view).forEach(btn => { btn.classList.add('is-on'); setTimeout(() => btn.classList.remove('is-on'), 900); });
   }
 
@@ -559,9 +559,9 @@ export class Reader {
     let list = this.marks.slice().sort((a, b) => this._markOrder(a) - this._markOrder(b));
     if (f === 'bm') list = list.filter(m => m.type === 'bookmark');
     else if (f) list = list.filter(m => m.emoji === f);
-    $$('#panel-emoji-filter button').forEach(b => { const k = b.dataset.f; const n = k === '' ? this.marks.length : k === 'bm' ? this.marks.filter(m => m.type === 'bookmark').length : this.marks.filter(m => m.emoji === k).length; b.title = `${b.title.split(' ·')[0]} · ${n}`; });
+    $$('#panel-emoji-filter button').forEach(b => { const k = b.dataset.f; const n = k === '' ? this.marks.length : k === 'bm' ? this.marks.filter(m => m.type === 'bookmark').length : this.marks.filter(m => m.emoji === k).length; b.title = `${b.title.split(' (')[0]} (${n})`; });
     if (!list.length) { ul.innerHTML = `<li class="empty-note">${this.marks.length ? 'Nothing with that reaction yet.' : 'Select text and tap a reaction to keep it.'}</li>`; return; }
-    ul.innerHTML = list.map(m => `<li class="${m.type === 'bookmark' ? 'bm' : ''}"><button data-id="${m.id}"><span class="em">${m.type === 'bookmark' ? '🔖' : (m.emoji || '✎')}</span><span class="q">${esc(m.text)}</span>${m.note ? `<span class="note">${esc(m.note)}</span>` : ''}</button></li>`).join('');
+    ul.innerHTML = list.map(m => `<li class="${m.type === 'bookmark' ? 'bm' : ''}"><button data-id="${m.id}"><span class="em">${m.type === 'bookmark' ? '<i class="ph-fill ph-bookmark-simple" aria-hidden="true"></i>' : (m.emoji || '<i class="ph ph-note-pencil" aria-hidden="true"></i>')}</span><span class="q">${esc(m.text)}</span>${m.note ? `<span class="note">${esc(m.note)}</span>` : ''}</button></li>`).join('');
     ul.onclick = (ev) => { const b = ev.target.closest('button'); if (!b) return; this.gotoMark(this.marks.find(m => m.id === b.dataset.id)); if (isMobile()) this.togglePanel(null); };
   }
   _markOrder(m) {

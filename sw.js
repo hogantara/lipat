@@ -1,5 +1,5 @@
 // Dogear service worker: offline app shell, cached libraries, "Share to Dogear" inbox.
-const VERSION = 'dogear-v4';
+const VERSION = 'dogear-v5';
 const SHELL = ['./', './index.html', './css/app.css', './js/app.js', './js/reader.js', './js/formats.js', './js/db.js', './js/config.js', './js/drive.js', './js/export.js', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 const INBOX = 'dogear-inbox';
 

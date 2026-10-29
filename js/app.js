@@ -34,7 +34,7 @@ function coverUrl(book) {
   if (!coverUrls.has(book.id)) coverUrls.set(book.id, URL.createObjectURL(book.cover));
   return coverUrls.get(book.id);
 }
-const PALETTE = ['#b5643c', '#5b7f6a', '#5e6b8f', '#9a5f7a', '#7a6c3d', '#3e7b85', '#8a5a44', '#4f6e4a'];
+const PALETTE = ['#2f4a3d', '#3b4653', '#4a4742', '#52443b', '#36443a', '#3f3e4b', '#45524a', '#4b4b4b'];
 const hue = (s) => { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0; return PALETTE[h % PALETTE.length]; };
 
 // chapter names for the Drive files: section heading, else the first TOC entry pointing at it
@@ -52,19 +52,41 @@ async function loadAll() {
 }
 function updateMarksCount() { $$('.marks-count').forEach(el => el.textContent = state.marks.length || ''); }
 
+function coverHtml(b) {
+  const url = coverUrl(b);
+  return url ? `<img src="${url}" alt="">` : `<div class="gen" style="background:${hue(b.title)}"><i>${esc(b.author || b.format)}</i><b>${esc(b.title)}</b></div>`;
+}
+function renderResume() {
+  const el = $('#resume');
+  const b = state.books.filter(x => x.lastOpened && (x.progress?.pct || 0) > 0.005 && (x.progress?.pct || 0) < 0.995).sort((x, y) => y.lastOpened - x.lastOpened)[0];
+  if (!b) { el.innerHTML = ''; return; }
+  const pct = Math.round(b.progress.pct * 100);
+  el.innerHTML = `<button class="resume" data-id="${b.id}">
+    <div class="cover">${coverHtml(b)}</div>
+    <div class="resume-body">
+      <span class="resume-kicker">Continue reading</span>
+      <span class="resume-title">${esc(b.title)}</span>
+      <span class="resume-sub">${b.author ? esc(b.author) + ', ' : ''}${pct}% read</span>
+      <div class="resume-bar"><i style="width:${pct}%"></i></div>
+    </div>
+    <span class="btn primary desktop-only">Continue</span>
+  </button>`;
+  el.querySelector('.resume').onclick = () => openBook(b.id);
+}
 function renderShelf() {
   const shelf = $('#shelf');
   $('#shelf-empty').hidden = state.books.length > 0;
+  renderResume();
+  $('#shelf-head').hidden = !state.books.length;
+  $('#shelf-count').textContent = state.books.length ? `${state.books.length} book${state.books.length === 1 ? '' : 's'}` : '';
   shelf.innerHTML = state.books.map(b => {
-    const url = coverUrl(b);
     const pct = Math.round((b.progress?.pct || 0) * 100);
     const n = state.marks.filter(m => m.bookId === b.id).length;
     return `<div class="book" data-id="${b.id}" role="button" tabindex="0">
-      <div class="cover">${url ? `<img src="${url}" alt="">` : `<div class="gen" style="background:${hue(b.title)}"><i>${esc(b.author || b.format)}</i><b>${esc(b.title)}</b></div>`}
-        ${pct > 0 ? `<div class="prog"><i style="width:${pct}%"></i></div>` : ''}</div>
+      <div class="cover">${coverHtml(b)}${pct > 0 ? `<div class="prog"><i style="width:${pct}%"></i></div>` : ''}</div>
       <div class="book-title">${esc(b.title)}</div>
-      <div class="book-sub"><span class="fmt">${b.format}</span>${b.author ? `<span>${esc(b.author)}</span>` : ''}${n ? `<span>· ${n} mark${n === 1 ? '' : 's'}</span>` : ''}${pct > 0 ? `<span>· ${pct}%</span>` : ''}</div>
-      <button class="book-x" title="Remove from shelf" aria-label="Remove">✕</button>
+      <div class="book-sub"><span class="fmt">${b.format}</span>${n ? `<span>${n} mark${n === 1 ? '' : 's'}</span>` : ''}${pct > 0 ? `<span>${pct}%</span>` : ''}</div>
+      <button class="book-x" title="Remove from shelf" aria-label="Remove"><i class="ph ph-x" aria-hidden="true"></i></button>
     </div>`;
   }).join('');
 }
@@ -111,8 +133,8 @@ async function importFiles(files) {
   let ok = 0, lastId = null;
   for (const f of files) {
     try {
-      txt.textContent = files.length > 1 ? `${f.name} — reading…` : 'Reading…';
-      const parsed = await parseFile(f, (msg) => { txt.textContent = (files.length > 1 ? f.name + ' — ' : '') + msg; });
+      txt.textContent = files.length > 1 ? `Reading ${f.name}` : 'Reading';
+      const parsed = await parseFile(f, (msg) => { txt.textContent = (files.length > 1 ? f.name + ': ' : '') + msg; });
       const id = uid();
       for (const s of parsed.sections) s.words = (s.html.replace(/<[^>]+>/g, ' ').match(/\S+/g) || []).length;
       const book = {
@@ -153,13 +175,13 @@ function showLibTab(t) {
   state.libtab = t;
   $$('[data-libtab]').forEach(b => b.classList.toggle('is-active', b.dataset.libtab === t));
   $$('.libtab').forEach(p => p.classList.toggle('is-active', p.id === 'libtab-' + t));
-  $('#lib-title').textContent = t === 'shelf' ? 'Dogear' : t === 'marks' ? 'Marks' : 'Settings';
+  $('#lib-title').textContent = !isMobile() || t === 'shelf' ? 'Dogear' : t === 'marks' ? 'Marks' : 'Settings';
   if (t === 'marks') renderMarksTab();
   if (t === 'settings') renderDriveStatus();
 }
 
 // ------------------------------------------------------------ marks tab
-$('#marks-emoji-filter').innerHTML = `<button data-f="" class="is-active" title="All">∗</button>` + EMOJIS.map(x => `<button data-f="${x.e}" title="${x.label}">${x.e}</button>`).join('') + `<button data-f="bm" title="Bookmarks">🔖</button>`;
+$('#marks-emoji-filter').innerHTML = `<button data-f="" class="is-active" title="All"><i class="ph ph-asterisk" aria-hidden="true"></i></button>` + EMOJIS.map(x => `<button data-f="${x.e}" title="${x.label}">${x.e}</button>`).join('') + `<button data-f="bm" title="Bookmarks"><i class="ph-fill ph-bookmark-simple" aria-hidden="true"></i></button>`;
 $('#marks-emoji-filter').onclick = (ev) => { const b = ev.target.closest('button'); if (!b) return; state.markFilter = b.dataset.f; $$('#marks-emoji-filter button').forEach(x => x.classList.toggle('is-active', x === b)); renderMarksTab(); };
 $('#marks-search').oninput = (ev) => { state.markQuery = ev.target.value.trim().toLowerCase(); renderMarksTab(); };
 $('#marks-book-filter').onchange = (ev) => { state.markBook = ev.target.value; renderMarksTab(); };
@@ -191,7 +213,7 @@ function renderMarksTab() {
   const list = filteredMarks();
   $('#marks-empty').hidden = state.marks.length > 0;
   const wrap = $('#marks-list');
-  if (!list.length) { wrap.innerHTML = state.marks.length ? '<div class="muted" style="padding:20px 0">No marks match.</div>' : ''; return; }
+  if (!list.length) { wrap.innerHTML = state.marks.length ? '<div class="no-match">No marks match.</div>' : ''; return; }
   const groups = new Map();
   for (const m of list) { if (!groups.has(m.bookId)) groups.set(m.bookId, []); groups.get(m.bookId).push(m); }
   const order = Array.from(groups.keys()).sort((a, b) => (bookById[b]?.lastOpened || 0) - (bookById[a]?.lastOpened || 0));
@@ -199,10 +221,10 @@ function renderMarksTab() {
     const b = bookById[bid]; const ms = groups.get(bid).sort((x, y) => markOrder(x) - markOrder(y));
     return `<div class="mgroup"><h3>${esc(b?.title || 'Unknown book')} <small>${ms.length}</small></h3>` + ms.map(m => `
       <button class="mcard ${m.type === 'bookmark' ? 'bm' : ''}" data-id="${m.id}">
-        <span class="em">${m.type === 'bookmark' ? '🔖' : (m.emoji || '✎')}</span>
+        <span class="em">${m.type === 'bookmark' ? '<i class="ph-fill ph-bookmark-simple" aria-hidden="true"></i>' : (m.emoji || '<i class="ph ph-note-pencil" aria-hidden="true"></i>')}</span>
         <span class="q">${esc(m.text)}</span>
         ${m.note ? `<span class="note">${esc(m.note)}</span>` : ''}
-        <span class="meta">${m.page ? `p. ${m.page} · ` : ''}${new Date(m.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span>
+        <span class="meta">${m.page ? `<span>p. ${m.page}</span>` : ''}<span>${new Date(m.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</span></span>
       </button>`).join('') + '</div>';
   }).join('');
 }
@@ -251,12 +273,12 @@ function renderDriveStatus() {
   $('#origin-hint').textContent = location.origin;
   if ($('#drive-client-id').value !== s.clientId) $('#drive-client-id').value = s.clientId;
   let cls = '', text = '';
-  if (!s.clientId) { text = 'Not set up yet — open “Setup” below.'; }
+  if (!s.clientId) { text = 'Not set up yet. Open Setup below.'; }
   else if (!s.connected) { text = 'Not connected.'; }
   else if (sync.status === 'busy') { cls = 'busy'; text = sync.message || 'Syncing…'; }
   else if (sync.status === 'error') { cls = 'err'; text = sync.message || 'Sync failed.'; }
   else if (sync.status === 'auth') { cls = 'err'; text = 'Google asked to sign in again. Tap “Sync now”.'; }
-  else { cls = 'ok'; text = s.lastSync ? `Synced ${timeAgo(s.lastSync)}${s.dirty.length ? ` · ${s.dirty.length} book${s.dirty.length === 1 ? '' : 's'} pending` : ''}` : 'Connected. Nothing synced yet.'; }
+  else { cls = 'ok'; text = s.lastSync ? `Synced ${timeAgo(s.lastSync)}${s.dirty.length ? `, ${s.dirty.length} book${s.dirty.length === 1 ? '' : 's'} pending` : ''}` : 'Connected. Nothing synced yet.'; }
   el.className = 'drive-status ' + cls;
   el.innerHTML = `<span class="dot"></span><span>${esc(text)}</span>`;
   connect.hidden = !s.clientId || s.connected;
@@ -303,7 +325,7 @@ window.addEventListener('online', () => { if (sync.settings.connected && sync.se
 async function syncDrive({ force = false, interactive = false } = {}) {
   const s = sync.settings;
   if (!sync.drive || !s.connected || sync.busy) return;
-  if (!navigator.onLine) { setSyncStatus('error', 'Offline — will sync when back online.'); return; }
+  if (!navigator.onLine) { setSyncStatus('error', 'Offline. Will sync when back online.'); return; }
   if (!force && !s.dirty.length) return;
   sync.busy = true;
   try {
@@ -338,13 +360,13 @@ async function syncDrive({ force = false, interactive = false } = {}) {
     s.lastSync = Date.now();
     await saveSyncSettings();
     setSyncStatus('ok');
-    if (force) toast(`Drive updated · ${n} book${n === 1 ? '' : 's'}`);
+    if (force) toast(`Drive updated, ${n} book${n === 1 ? '' : 's'}`);
   } catch (e) {
     console.warn('sync', e);
     if (e instanceof DriveError && (e.code === 'auth' || /popup|access_denied|no_token|cancel/i.test(e.code))) {
       if (e.code === 'http404' || e.code === 'http403') { s.folders = null; }
       setSyncStatus('auth');
-    } else if (e instanceof DriveError && e.code === 'http404') { s.folders = null; s.files = {}; await saveSyncSettings(); setSyncStatus('error', 'Drive folder moved — tap Sync now to recreate it.'); }
+    } else if (e instanceof DriveError && e.code === 'http404') { s.folders = null; s.files = {}; await saveSyncSettings(); setSyncStatus('error', 'Drive folder moved. Tap Sync now to recreate it.'); }
     else setSyncStatus('error', e.message || 'Sync failed');
   } finally { sync.busy = false; renderDriveStatus(); }
 }
