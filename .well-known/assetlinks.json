@@ -1,0 +1,1 @@
+[{"relation": ["delegate_permission/common.handle_all_urls"], "target": {"namespace": "android_app", "package_name": "io.github.hogantara.dogear", "sha256_cert_fingerprints": ["C9:A7:A6:25:34:07:BB:2E:E9:5F:26:2F:4C:3E:21:1E:92:A7:14:44:DA:FE:D8:06:41:6B:B5:ED:04:25:AD:44"]}}]

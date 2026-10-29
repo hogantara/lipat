@@ -1,2 +1,11 @@
 .DS_Store
 *.icloud
+android/android.keystore
+android/signing.txt
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+android/*.apk
+android/*.aab
+android/*.idsig
