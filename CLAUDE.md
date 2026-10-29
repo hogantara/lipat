@@ -16,7 +16,7 @@ Open http://localhost:8477/?nosw (the `nosw` query skips the service worker so e
 - `js/app.js` — shelf, marks tab, settings, Drive sync, PWA plumbing. `BUILD` constant shows in Settings; bump it with user-visible changes.
 - `js/reader.js` — reading surface, marks, touch selection (Lipat runs its own long-press selection on coarse pointers; native selection is disabled there on purpose, see comment above `_wireTouchSelection`).
 - `js/formats.js` — PDF reflow, EPUB, DOCX, MD, HTML, TXT parsers. `js/db.js` IndexedDB v2. `js/drive.js`, `js/export.js` Drive and Markdown.
-- `sw.js` — bump `VERSION` whenever shipped files change, or phones keep the old shell.
+- `sw.js` — app files are network first (cache is the offline fallback), so a deploy reaches phones on the next load. Still bump `VERSION` when shipped files change so the offline copy refreshes.
 - `android/` — Bubblewrap Trusted Web Activity. Build steps in README "Android app". Keystore and password are gitignored; never commit them. Share-target `accept` must be MIME types only.
 - `.well-known/assetlinks.json` here is informational; the one Android reads lives in the sibling repo `hogantara.github.io`.
 

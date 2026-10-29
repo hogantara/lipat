@@ -1,10 +1,11 @@
 // Lipat service worker: offline app shell, cached libraries, "Share to Lipat" inbox.
-const VERSION = 'lipat-v3';
+const VERSION = 'lipat-v4';
 const SHELL = ['./', './index.html', './css/app.css', './js/app.js', './js/reader.js', './js/formats.js', './js/db.js', './js/config.js', './js/drive.js', './js/export.js', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 const INBOX = 'lipat-inbox';
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // reload: skip the HTTP cache, or a fresh worker can precache files from the previous deploy.
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== INBOX).map(k => caches.delete(k)))).then(() => self.clients.claim()));
@@ -26,19 +27,25 @@ self.addEventListener('fetch', (e) => {
     return;
   }
   if (e.request.method !== 'GET') return;
-  if (e.request.mode === 'navigate') {
-    e.respondWith(fetch(e.request).then(r => { const copy = r.clone(); caches.open(VERSION).then(c => c.put('./index.html', copy)); return r; }).catch(() => caches.match('./index.html')));
+  // App files and pages: network first, cache only when offline. Serving cached scripts under a
+  // fresh page paired new HTML with old JS after a deploy and broke the app until the cache caught up.
+  // no-cache revalidates past the HTTP cache (GitHub Pages sends max-age=600).
+  const sameOrigin = url.origin === self.location.origin;
+  if (sameOrigin) {
+    const key = e.request.mode === 'navigate' ? './index.html' : e.request;
+    e.respondWith(caches.open(VERSION).then(c => fetch(e.request, { cache: 'no-cache' })
+      .then(r => { if (r.ok) c.put(key, r.clone()); return r; })
+      .catch(async () => (await c.match(key)) || Response.error())));
     return;
   }
-  const sameOrigin = url.origin === self.location.origin;
-  const isLib = /cdnjs\.cloudflare\.com|fonts\.(googleapis|gstatic)\.com/.test(url.host);
-  if (sameOrigin || isLib) {
+  // Libraries: versioned URLs, so cache first.
+  if (/cdnjs\.cloudflare\.com|fonts\.(googleapis|gstatic)\.com/.test(url.host)) {
     e.respondWith(caches.open(VERSION).then(async (c) => {
       const cached = await c.match(e.request);
-      const net = fetch(e.request).then(r => { if (r.ok) c.put(e.request, r.clone()); return r; }).catch(() => null);
-      if (isLib && cached) return cached;           // libraries: cache first
-      if (cached) { net.catch(() => {}); return cached; } // app files: stale while revalidate
-      return (await net) || Response.error();
+      if (cached) return cached;
+      const r = await fetch(e.request).catch(() => null);
+      if (r && r.ok) c.put(e.request, r.clone());
+      return r || Response.error();
     }));
   }
 });
