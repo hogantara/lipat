@@ -121,4 +121,4 @@ Outputs `app-release-signed.apk` (sideload, also copied to `download/` on the si
 
 ## Name
 
-Lipat is Indonesian for fold. The mark is a strip of paper folded once into an L. The app was called Dogear until 2026-10-30; the IndexedDB database keeps the old internal name so nothing is lost, and the Google Drive folder keeps whatever name it had (sync follows file ids, so renaming the folder in Drive is safe).
+Lipat is Indonesian for fold. The mark is a strip of paper folded once into an L. The app was called Dogear until 2026-10-30 (Android package `io.github.hogantara.dogear`, which must be uninstalled by hand since the Lipat package `io.github.hogantara.lipat` is a different app); the IndexedDB database keeps the old internal name so nothing is lost, and the Google Drive folder keeps whatever name it had (sync follows file ids, so renaming the folder in Drive is safe).
