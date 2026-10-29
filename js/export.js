@@ -1,4 +1,4 @@
-// Markdown builders for everything Dogear keeps. Used for Google Drive files and for downloads.
+// Markdown builders for everything Lipat keeps. Used for Google Drive files and for downloads.
 export const REACTIONS = [
   { e: '💡', label: 'Aha', slug: 'aha' },
   { e: '❤️', label: 'Love', slug: 'love' },
@@ -39,7 +39,7 @@ function markBlock(m, { withBook = null } = {}) {
 export function bookMarkdown(book, marks, sectionTitles = {}) {
   const ms = sortMarks(marks);
   const head = [book.author, (book.format || '').toUpperCase(), summaryLine(ms)].filter(Boolean).join(' · ');
-  let md = `# ${book.title}\n\n${head}  \n<sub>Updated ${fmtDate(Date.now())} · kept with Dogear</sub>\n\n`;
+  let md = `# ${book.title}\n\n${head}  \n<sub>Updated ${fmtDate(Date.now())} · kept with Lipat</sub>\n\n`;
   // untitled sections (e.g. a chapter split over several files) inherit the last known chapter name
   const ids = Object.keys(sectionTitles).sort((a, b) => secIndex(a) - secIndex(b));
   const effective = {}; let carry = '';
@@ -61,7 +61,7 @@ export function reactionMarkdown(reaction, books, marks) {
   const list = marks.filter(m => isBm ? m.type === 'bookmark' : m.emoji === reaction);
   const byBook = new Map();
   for (const m of list) { if (!byBook.has(m.bookId)) byBook.set(m.bookId, []); byBook.get(m.bookId).push(m); }
-  let md = `# ${title}\n\n${list.length} across ${byBook.size} book${byBook.size === 1 ? '' : 's'}  \n<sub>Updated ${fmtDate(Date.now())} · kept with Dogear</sub>\n\n`;
+  let md = `# ${title}\n\n${list.length} across ${byBook.size} book${byBook.size === 1 ? '' : 's'}  \n<sub>Updated ${fmtDate(Date.now())} · kept with Lipat</sub>\n\n`;
   const order = Array.from(byBook.keys()).sort((a, b) => (books[b]?.lastOpened || 0) - (books[a]?.lastOpened || 0));
   for (const bid of order) {
     const b = books[bid];
@@ -72,10 +72,10 @@ export function reactionMarkdown(reaction, books, marks) {
   return md;
 }
 
-// Index.md: the table of contents of the Dogear folder.
+// Index.md: the table of contents of the Lipat folder.
 export function indexMarkdown(booksArr, marks) {
   const c = counts(marks);
-  let md = `# Dogear\n\nEverything you kept while reading. One file per book in **Books/**, one file per reaction in **By reaction/**.  \n<sub>Updated ${fmtDate(Date.now())}</sub>\n\n`;
+  let md = `# Lipat\n\nEverything you kept while reading. One file per book in **Books/**, one file per reaction in **By reaction/**.  \n<sub>Updated ${fmtDate(Date.now())}</sub>\n\n`;
   md += `**${c.total} marks** · ${REACTIONS.map(r => `${r.e} ${c[r.e]}`).join(' · ')} · 🔖 ${c.bookmarks}\n\n## Books\n\n`;
   md += '| Book | Author | Marks | Reactions |\n|---|---|---:|---|\n';
   const rows = booksArr.map(b => ({ b, ms: marks.filter(m => m.bookId === b.id) })).filter(x => x.ms.length).sort((x, y) => (y.b.lastOpened || 0) - (x.b.lastOpened || 0));
@@ -92,7 +92,7 @@ export function allMarksMarkdown(booksArr, marks, sectionTitlesByBook = {}) {
   const byId = Object.fromEntries(booksArr.map(b => [b.id, b]));
   const byBook = new Map();
   for (const m of marks) { if (!byBook.has(m.bookId)) byBook.set(m.bookId, []); byBook.get(m.bookId).push(m); }
-  let md = `# Marks from Dogear\n\n${summaryLine(marks)}  \n<sub>${fmtDate(Date.now())}</sub>\n\n`;
+  let md = `# Marks from Lipat\n\n${summaryLine(marks)}  \n<sub>${fmtDate(Date.now())}</sub>\n\n`;
   for (const [bid, ms] of byBook) {
     const b = byId[bid] || { title: 'Unknown book' };
     md += bookMarkdown(b, ms, sectionTitlesByBook[bid] || {}).replace(/^# /, '## ').replace(/\n## /g, '\n### ') + '\n---\n\n';

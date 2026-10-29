@@ -1,11 +1,11 @@
 // Google Drive client. OAuth via Google Identity Services (token flow), scope drive.file only:
-// Dogear can see and edit only the files it created.
+// Lipat can see and edit only the files it created.
 const GIS_SRC = 'https://accounts.google.com/gsi/client';
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const API = 'https://www.googleapis.com/drive/v3';
 const UPLOAD = 'https://www.googleapis.com/upload/drive/v3';
 const FOLDER = 'application/vnd.google-apps.folder';
-const TOKEN_KEY = 'dogear.drive.token';
+const TOKEN_KEY = 'lipat.drive.token';
 
 let gisLoading = null;
 function loadGis() {

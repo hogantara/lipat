@@ -1,15 +1,15 @@
-# Dogear
+# Lipat
 
 A calm, mobile-first e-reader that turns what you read into what you keep.
 
-Add a PDF, EPUB, Word document, Markdown, plain text or saved web page. Dogear detects the format
+Add a PDF, EPUB, Word document, Markdown, plain text or saved web page. Lipat detects the format
 itself, reflows everything into one comfortable reading column, and lets you react to ideas with one
 of five emoji so your marks stay organised. Connect Google Drive and every mark lands in a tidy
 Markdown folder, one file per book.
 
 ## Live
 
-<https://hogantara.github.io/dogear/> — open on your phone, then **Add to Home Screen** / **Install app**.
+<https://hogantara.github.io/lipat/> — open on your phone, then **Add to Home Screen** / **Install app**.
 The Google client ID for this origin is baked into `js/config.js`, so Settings → Connect Google Drive just works there.
 
 ## Run it
@@ -18,7 +18,7 @@ Static files, no build step. Serve the folder over HTTP (ES modules, the PDF wor
 worker all need it):
 
 ```bash
-python3 -m http.server 8477 --directory dogear
+python3 -m http.server 8477 --directory lipat
 ```
 
 Open <http://localhost:8477>. On a phone, open the same URL and choose **Add to Home Screen**
@@ -50,11 +50,11 @@ Any other static HTTPS host works too, as long as its origin is added to the OAu
 **Google Drive**
 - Settings → Google Drive. One-time setup: create an OAuth client ID (type Web application) in
   Google Cloud, enable the Drive API, add the site's origin to Authorized JavaScript origins, paste
-  the client ID. Dogear asks only for the `drive.file` scope: it can see and edit only files it created.
+  the client ID. Lipat asks only for the `drive.file` scope: it can see and edit only files it created.
 - Folder layout in your Drive:
 
   ```
-  Dogear/
+  Lipat/
     Index.md                 table of all books with counts
     Books/
       The Psychology of Money.md   marks grouped by chapter, in reading order
@@ -69,7 +69,7 @@ Any other static HTTPS host works too, as long as its origin is added to the OAu
 
 **PWA**
 - Installable, works offline (app shell and libraries cached).
-- Android: "Share to Dogear" from any app's share sheet, and "Open with Dogear" for supported files.
+- Android: "Share to Lipat" from any app's share sheet, and "Open with Lipat" for supported files.
 
 ## Layout
 
@@ -116,4 +116,9 @@ bubblewrap build --skipPwaValidation
 
 Outputs `app-release-signed.apk` (sideload, also copied to `download/` on the site) and `app-release-bundle.aab` (Play Console). Bump `appVersionCode` and `appVersion` in `twa-manifest.json` before each release (share-target `accept` must list MIME types only, never extensions, or Android refuses to install), then run `bubblewrap update --skipVersionUpgrade` and build again.
 
-`android/android.keystore` and `android/signing.txt` are the signing key and its password. They are gitignored. Keep a backup: Play updates must be signed with the same key. The key's SHA-256 fingerprint is published at `https://hogantara.github.io/.well-known/assetlinks.json` (repo `hogantara/hogantara.github.io`, the domain root; Android ignores a copy under `/dogear/`). Without it the app opens with a browser bar on top.
+`android/android.keystore` and `android/signing.txt` are the signing key and its password. They are gitignored. Keep a backup: Play updates must be signed with the same key. The key's SHA-256 fingerprint is published at `https://hogantara.github.io/.well-known/assetlinks.json` (repo `hogantara/hogantara.github.io`, the domain root; Android ignores a copy under `/lipat/`). Without it the app opens with a browser bar on top.
+
+
+## Name
+
+Lipat is Indonesian for fold. The mark is a strip of paper folded once into an L. The app was called Dogear until 2026-10-30; the IndexedDB database keeps the old internal name so nothing is lost, and the Google Drive folder keeps whatever name it had (sync follows file ids, so renaming the folder in Drive is safe).

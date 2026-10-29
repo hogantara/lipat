@@ -1,7 +1,7 @@
-// Dogear service worker: offline app shell, cached libraries, "Share to Dogear" inbox.
-const VERSION = 'dogear-v8';
+// Lipat service worker: offline app shell, cached libraries, "Share to Lipat" inbox.
+const VERSION = 'lipat-v1';
 const SHELL = ['./', './index.html', './css/app.css', './js/app.js', './js/reader.js', './js/formats.js', './js/db.js', './js/config.js', './js/drive.js', './js/export.js', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
-const INBOX = 'dogear-inbox';
+const INBOX = 'lipat-inbox';
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

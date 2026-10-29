@@ -1,4 +1,4 @@
-/* ===================== Dogear (mobile-first) =====================
+/* ===================== Lipat (mobile-first) =====================
    Shape rule: controls 10px, inputs 10px, surfaces 12px, sheets 20px (top). Covers keep book geometry.
    Color rule: one accent (green) for primary actions, active state and progress. Everything else neutral.
 */
@@ -101,9 +101,7 @@ kbd { font: 12px/1 var(--font-ui); background: var(--card); border: 1px solid va
 .lib-header { display: flex; align-items: center; gap: 12px; padding: calc(var(--sat) + 12px) 16px 6px; min-height: calc(var(--sat) + 62px); }
 .brand { display: flex; align-items: center; gap: 9px; }
 .brand h1 { font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
-.brand-mark { width: 18px; height: 22px; border-radius: 3px; background: var(--bg-3); position: relative; overflow: hidden; }
-.brand-mark::after { content: ""; position: absolute; right: 0; top: 0; border-style: solid; border-width: 0 9px 9px 0; border-color: transparent var(--bg) transparent transparent; }
-.brand-mark::before { content: ""; position: absolute; right: 0; top: 0; width: 9px; height: 9px; background: var(--accent); clip-path: polygon(0 0, 0 100%, 100% 100%); }
+.brand-mark { width: 18px; height: 21px; display: block; }
 .lib-nav { display: flex; gap: 2px; margin-left: 10px; }
 .lib-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 .lib-body { flex: 1; min-height: 0; position: relative; }

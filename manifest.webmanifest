@@ -1,6 +1,6 @@
 {
-  "name": "Dogear",
-  "short_name": "Dogear",
+  "name": "Lipat",
+  "short_name": "Lipat",
   "description": "A calm e-reader that turns what you read into what you keep.",
   "start_url": "./?source=pwa",
   "scope": "./",

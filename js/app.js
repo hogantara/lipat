@@ -5,7 +5,7 @@ import { Reader, EMOJIS, DEFAULT_PREFS, applyPrefs, isMobile } from './reader.js
 import { Drive, DriveError } from './drive.js';
 import { bookMarkdown, reactionMarkdown, indexMarkdown, allMarksMarkdown, safeName, REACTIONS } from './export.js';
 import { GOOGLE_CLIENT_ID } from './config.js';
-export const BUILD = '2026-10-29.3';
+export const BUILD = '2026-10-30.1';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -176,7 +176,7 @@ function showLibTab(t) {
   state.libtab = t;
   $$('[data-libtab]').forEach(b => b.classList.toggle('is-active', b.dataset.libtab === t));
   $$('.libtab').forEach(p => p.classList.toggle('is-active', p.id === 'libtab-' + t));
-  $('#lib-title').textContent = !isMobile() || t === 'shelf' ? 'Dogear' : t === 'marks' ? 'Marks' : 'Settings';
+  $('#lib-title').textContent = !isMobile() || t === 'shelf' ? 'Lipat' : t === 'marks' ? 'Marks' : 'Settings';
   if (t === 'marks') renderMarksTab();
   if (t === 'settings') renderDriveStatus();
 }
@@ -243,9 +243,9 @@ $('#btn-export').onclick = async () => {
   for (const b of state.books) if (b.sectionTitles) titles[b.id] = b.sectionTitles;
   const md = allMarksMarkdown(state.books, state.marks, titles);
   const blob = new Blob([md], { type: 'text/markdown' });
-  const file = new File([blob], 'dogear-marks.md', { type: 'text/markdown' });
-  if (navigator.canShare && navigator.canShare({ files: [file] }) && isMobile()) { try { await navigator.share({ files: [file], title: 'Dogear marks' }); return; } catch {} }
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'dogear-marks.md'; a.click();
+  const file = new File([blob], 'lipat-marks.md', { type: 'text/markdown' });
+  if (navigator.canShare && navigator.canShare({ files: [file] }) && isMobile()) { try { await navigator.share({ files: [file], title: 'Lipat marks' }); return; } catch {} }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'lipat-marks.md'; a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 };
 
@@ -264,7 +264,7 @@ document.addEventListener('keydown', (ev) => {
 });
 
 // ------------------------------------------------------------ Google Drive sync
-const DRIVE_FOLDER = 'Dogear';
+const DRIVE_FOLDER = 'Lipat';
 function setSyncStatus(status, message = '') {
   sync.status = status; sync.message = message; renderDriveStatus();
 }
@@ -379,7 +379,7 @@ $('#btn-install').onclick = async () => { if (!installPrompt) return; installPro
 async function drainInbox() {
   if (!('caches' in window)) return;
   try {
-    const inbox = await caches.open('dogear-inbox');
+    const inbox = await caches.open('lipat-inbox');
     const keys = await inbox.keys();
     const files = [];
     for (const req of keys) {
@@ -393,7 +393,7 @@ async function drainInbox() {
 }
 if ('launchQueue' in window) window.launchQueue.setConsumer(async (p) => { if (p.files?.length) importFiles(await Promise.all(p.files.map(h => h.getFile()))); });
 function renderStorage() {
-  $('#build-info').textContent = 'Dogear build ' + BUILD;
+  $('#build-info').textContent = 'Lipat build ' + BUILD;
   const el = $('#storage-info');
   const n = state.books.length;
   el.textContent = `${n} book${n === 1 ? '' : 's'} and ${state.marks.length} mark${state.marks.length === 1 ? '' : 's'} stored in this browser.`;
@@ -422,4 +422,4 @@ function renderStorage() {
   if (sync.settings.connected && sync.settings.dirty.length && sync.drive?.hasToken) syncDrive();
 })();
 
-window.dogear = { importFiles, openBook, loadAll, syncDrive, get state() { return state; }, get reader() { return reader; }, get sync() { return sync; } };
+window.lipat = window.dogear = { importFiles, openBook, loadAll, syncDrive, get state() { return state; }, get reader() { return reader; }, get sync() { return sync; } };

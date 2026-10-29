@@ -441,7 +441,7 @@ export class Reader {
     document.body.classList.remove('chrome-hidden');
   }
 
-  // Touch: Dogear runs the selection itself. The reading surface has user-select: none on coarse
+  // Touch: Lipat runs the selection itself. The reading surface has user-select: none on coarse
   // pointers, so Chrome never starts a native selection (and never shows its toolbar or Touch to
   // Search). Long-press picks the word under the finger, dragging extends by whole words, lifting
   // shows the bubble. Everything is tracked as character offsets inside the section, which stay
