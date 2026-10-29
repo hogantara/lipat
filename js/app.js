@@ -5,7 +5,7 @@ import { Reader, EMOJIS, DEFAULT_PREFS, applyPrefs, isMobile } from './reader.js
 import { Drive, DriveError } from './drive.js';
 import { bookMarkdown, reactionMarkdown, indexMarkdown, allMarksMarkdown, safeName, REACTIONS } from './export.js';
 import { GOOGLE_CLIENT_ID } from './config.js';
-export const BUILD = '2026-10-30.2';
+export const BUILD = '2026-10-30.3';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -77,6 +77,7 @@ function renderResume() {
 function renderShelf() {
   const shelf = $('#shelf');
   $('#shelf-empty').hidden = state.books.length > 0;
+  $('.lib-header').toggleAttribute('data-empty', !state.books.length);
   renderResume();
   $('#shelf-head').hidden = !state.books.length;
   $('#shelf-count').textContent = state.books.length ? `${state.books.length} book${state.books.length === 1 ? '' : 's'}` : '';
@@ -162,7 +163,6 @@ $('#file-input').addEventListener('change', (ev) => { importFiles(ev.target.file
 const pickFiles = () => $('#file-input').click();
 $('#btn-add').onclick = pickFiles;
 $('#btn-add-empty').onclick = pickFiles;
-$('.tabbar [data-act="add"]').onclick = pickFiles;
 
 let dragDepth = 0;
 window.addEventListener('dragenter', (ev) => { if (!ev.dataTransfer?.types?.includes('Files')) return; dragDepth++; $('#drop-overlay').hidden = false; });
@@ -174,6 +174,7 @@ window.addEventListener('drop', (ev) => { ev.preventDefault(); dragDepth = 0; $(
 $$('[data-libtab]').forEach(b => b.onclick = () => showLibTab(b.dataset.libtab));
 function showLibTab(t) {
   state.libtab = t;
+  $('.lib-header').dataset.tab = t;
   $$('[data-libtab]').forEach(b => b.classList.toggle('is-active', b.dataset.libtab === t));
   $$('.libtab').forEach(p => p.classList.toggle('is-active', p.id === 'libtab-' + t));
   $('#lib-title').textContent = !isMobile() || t === 'shelf' ? 'Lipat' : t === 'marks' ? 'Marks' : 'Settings';

@@ -25,7 +25,7 @@
 
 <!-- ========== LIBRARY ========== -->
 <section id="view-library" class="view">
-  <header class="lib-header">
+  <header class="lib-header" data-tab="shelf">
     <div class="brand">
       <img class="brand-mark" src="icons/mark.svg" alt="" aria-hidden="true">
       <h1 id="lib-title">Lipat</h1>
@@ -39,7 +39,7 @@
       <button id="btn-theme" class="icon-btn" title="Theme (T)" aria-label="Theme">
         <i class="ph ph-circle-half" aria-hidden="true"></i>
       </button>
-      <button id="btn-add" class="btn primary desktop-only"><i class="ph ph-plus" aria-hidden="true"></i>Add books</button>
+      <button id="btn-add" class="btn primary" aria-label="Add books"><i class="ph ph-plus" aria-hidden="true"></i><span>Add<span class="desktop-only"> books</span></span></button>
       <input id="file-input" type="file" multiple hidden accept=".pdf,.epub,.docx,.md,.markdown,.txt,.html,.htm,application/pdf,application/epub+zip,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/html">
     </div>
   </header>
@@ -132,10 +132,9 @@
   </div>
 
   <nav class="tabbar mobile-only">
-    <button class="tb is-active" data-libtab="shelf"><i class="ph ph-books" aria-hidden="true"></i><i class="ph-fill ph-books" aria-hidden="true"></i><span>Shelf</span></button>
-    <button class="tb" data-libtab="marks"><i class="ph ph-bookmark-simple" aria-hidden="true"></i><i class="ph-fill ph-bookmark-simple" aria-hidden="true"></i><span>Marks</span><span class="count marks-count"></span></button>
-    <button class="tb tb-add" data-act="add"><span class="plus"><i class="ph ph-plus" aria-hidden="true"></i></span><span>Add</span></button>
-    <button class="tb" data-libtab="settings"><i class="ph ph-gear-six" aria-hidden="true"></i><i class="ph-fill ph-gear-six" aria-hidden="true"></i><span>Settings</span></button>
+    <button class="tb is-active" data-libtab="shelf"><span class="tb-ic"><i class="ph ph-books" aria-hidden="true"></i><i class="ph-fill ph-books" aria-hidden="true"></i></span><span>Shelf</span></button>
+    <button class="tb" data-libtab="marks"><span class="tb-ic"><i class="ph ph-bookmark-simple" aria-hidden="true"></i><i class="ph-fill ph-bookmark-simple" aria-hidden="true"></i><span class="count marks-count"></span></span><span>Marks</span></button>
+    <button class="tb" data-libtab="settings"><span class="tb-ic"><i class="ph ph-gear-six" aria-hidden="true"></i><i class="ph-fill ph-gear-six" aria-hidden="true"></i></span><span>Settings</span></button>
   </nav>
 
   <div id="drop-overlay" class="drop-overlay" hidden><div>Drop to add</div></div>
