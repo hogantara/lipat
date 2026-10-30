@@ -5,7 +5,7 @@ import { Reader, EMOJIS, DEFAULT_PREFS, applyPrefs, isMobile } from './reader.js
 import { Drive, DriveError } from './drive.js';
 import { bookMarkdown, reactionMarkdown, indexMarkdown, allMarksMarkdown, safeName, REACTIONS } from './export.js';
 import { GOOGLE_CLIENT_ID } from './config.js';
-export const BUILD = '2026-10-30.5';
+export const BUILD = '2026-10-30.6';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -137,7 +137,10 @@ async function importFiles(files) {
   for (const f of files) {
     try {
       txt.textContent = files.length > 1 ? `Reading ${f.name}` : 'Reading';
-      const parsed = await parseFile(f, (msg) => { txt.textContent = (files.length > 1 ? f.name + ': ' : '') + msg; });
+      // Read the bytes once, up front, and work from memory. A file picked from Google Drive on Android is read
+      // through Drive each time, and a later read can fail with NotReadableError once Drive has re-fetched it.
+      const file = new File([await f.arrayBuffer()], f.name, { type: f.type, lastModified: f.lastModified });
+      const parsed = await parseFile(file, (msg) => { txt.textContent = (files.length > 1 ? f.name + ': ' : '') + msg; });
       const id = uid();
       for (const s of parsed.sections) s.words = (s.html.replace(/<[^>]+>/g, ' ').match(/\S+/g) || []).length;
       const book = {
@@ -147,12 +150,14 @@ async function importFiles(files) {
         addedAt: Date.now(), lastOpened: 0, progress: null, fileName: f.name, size: f.size,
       };
       await db.putBook(book);
-      if (parsed.format === 'pdf') await db.putFile(id, f);
+      if (parsed.format === 'pdf') await db.putFile(id, file);
       ok++; lastId = id;
       if (files.length > 1) await loadAll();
     } catch (e) {
       console.error(e);
-      toast(`Couldn't read ${f.name}`, { label: 'Details', fn: () => toast(String(e?.message || e).slice(0, 160)) });
+      const details = { label: 'Details', fn: () => toast(String(e?.message || e).slice(0, 160)) };
+      if (e?.name === 'NotReadableError') toast(`Your phone couldn't open ${f.name}. If it's in Google Drive, download it first, then add it from Downloads.`, details);
+      else toast(`Couldn't read ${f.name}`, details);
     }
   }
   prog.hidden = true;
