@@ -59,7 +59,7 @@
     </div>
 
     <div id="libtab-marks" class="libtab">
-      <div class="marks-toolbar">
+      <div class="marks-toolbar" id="marks-toolbar">
         <div id="marks-emoji-filter" class="emoji-filter"></div>
         <div class="marks-toolbar-row">
           <input id="marks-search" type="search" placeholder="Search your marks…" class="input">
@@ -254,9 +254,9 @@
     <div class="sheet-handle" aria-hidden="true"></div>
     <div class="row">
       <span class="lbl">Size</span>
-      <button class="step" data-font="-1" aria-label="Smaller">A<sub>−</sub></button>
+      <button class="step sm" data-font="-1" aria-label="Smaller text">A</button>
       <input id="font-size" type="range" min="14" max="34" step="1" value="19">
-      <button class="step" data-font="1" aria-label="Larger">A<sup>+</sup></button>
+      <button class="step lg" data-font="1" aria-label="Larger text">A</button>
     </div>
     <div class="row">
       <span class="lbl">Font</span>

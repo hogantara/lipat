@@ -380,7 +380,11 @@ export class Reader {
     for (const [id, key] of Object.entries(map)) $$('#' + id + ' button').forEach(b => b.classList.toggle('is-active', b.dataset.v === String(this.prefs[key])));
   }
   togglePop() { this.typePop.hidden = !this.typePop.hidden; if (!this.typePop.hidden) { this.panel.hidden = true; this.closeEditor(); if (this.pending) this.hideBubble(); } this._syncScrim(); }
-  _syncScrim() { this.scrim.hidden = !isMobile() || (this.panel.hidden && this.typePop.hidden && this.editor.hidden); }
+  _syncScrim() {
+    this.scrim.hidden = !isMobile() || (this.panel.hidden && this.typePop.hidden && this.editor.hidden);
+    // a toast left over from before a sheet opened would float over the sheet's fields
+    if (!this.scrim.hidden) this.toast.hide?.();
+  }
 
   // ------------------------------------------------------------ panel
   togglePanel(tab, focusSearch = false) {
@@ -455,7 +459,7 @@ export class Reader {
       }
     }
     sum.textContent = hits.length ? `${hits.length}${hits.length >= 200 ? '+' : ''} result${hits.length === 1 ? '' : 's'}` : 'No results';
-    ul.innerHTML = hits.map((h, i) => `<li><button data-i="${i}">${h.title ? `<small>${esc(h.title)}</small>` : ''}…${esc(h.ctx)}<b>${esc(q)}</b>${esc(h.after)}…</button></li>`).join('');
+    ul.innerHTML = hits.map((h, i) => `<li><button data-i="${i}">${h.title ? `<small>${esc(h.title)}</small>` : ''}…${esc(h.ctx)}<b>${esc(this._sectionText(h.sid).slice(h.start, h.end))}</b>${esc(h.after)}…</button></li>`).join('');
     ul.onclick = (ev) => { const b = ev.target.closest('button'); if (!b) return; this._showHit(hits[Number(b.dataset.i)]); if (isMobile()) this.togglePanel(null); };
   }
   _clearSearchHits() { $$('.search-hit', this.content).forEach(el => { const p = el.parentNode; p.replaceChild(document.createTextNode(el.textContent), el); p.normalize(); }); }
@@ -968,7 +972,7 @@ export class Reader {
   _addZoomCtl() {
     this._removeZoomCtl();
     const z = document.createElement('div'); z.className = 'zoom-ctl'; z.id = 'zoom-ctl';
-    z.innerHTML = '<button title="Zoom out">−</button><button title="Zoom in">+</button>';
+    z.innerHTML = '<button title="Zoom out" aria-label="Zoom out"><i class="ph ph-minus" aria-hidden="true"></i></button><button title="Zoom in" aria-label="Zoom in"><i class="ph ph-plus" aria-hidden="true"></i></button>';
     const [out, inn] = z.querySelectorAll('button');
     out.onclick = () => { this.zoom = clamp(this.zoom - 0.2, 0.5, 3); this._layoutPages(); };
     inn.onclick = () => { this.zoom = clamp(this.zoom + 0.2, 0.5, 3); this._layoutPages(); };
