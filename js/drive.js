@@ -1,5 +1,5 @@
 // Google Drive client. OAuth via Google Identity Services (token flow), scope drive.file only:
-// Lipat can see and edit only the files it created.
+// Lipat can see and edit only the files it created, plus files the user picks in the Google Picker.
 const GIS_SRC = 'https://accounts.google.com/gsi/client';
 const SCOPE = 'https://www.googleapis.com/auth/drive.file';
 const API = 'https://www.googleapis.com/drive/v3';
@@ -17,6 +17,21 @@ function loadGis() {
     document.head.appendChild(s);
   });
   return gisLoading;
+}
+
+// Google Picker, for adding books from Drive. Picking a file grants drive.file access to that file only.
+const GAPI_SRC = 'https://apis.google.com/js/api.js';
+let pickerLoading = null;
+function loadPicker() {
+  if (window.google?.picker) return Promise.resolve();
+  if (pickerLoading) return pickerLoading;
+  pickerLoading = new Promise((res, rej) => {
+    const fail = () => { pickerLoading = null; rej(new Error('Could not load the Google Drive picker')); };
+    const s = document.createElement('script'); s.src = GAPI_SRC; s.async = true;
+    s.onload = () => window.gapi.load('picker', { callback: res, onerror: fail }); s.onerror = fail;
+    document.head.appendChild(s);
+  });
+  return pickerLoading;
 }
 
 export class DriveError extends Error { constructor(msg, code) { super(msg); this.code = code; } }
@@ -63,6 +78,40 @@ export class Drive {
     if (res.status === 401) { this._token = null; try { sessionStorage.removeItem(TOKEN_KEY); } catch {} throw new DriveError('Signed out of Google', 'auth'); }
     if (!res.ok) { let msg = res.statusText; try { msg = (await res.json()).error?.message || msg; } catch {} throw new DriveError(msg, 'http' + res.status); }
     return res.status === 204 ? null : res.json();
+  }
+
+  // Load sign-in and picker scripts ahead of the tap, so the sign-in popup still counts as user-initiated on mobile.
+  prepare() { return Promise.all([loadGis(), loadPicker()]).catch(() => {}); }
+
+  // Show the Google Picker. Resolves to [{ id, name, mimeType }], or [] if cancelled.
+  // apiKey is a browser key with the Picker API enabled; the app ID is the Cloud project number, which the client ID starts with.
+  async pick({ apiKey, mimeTypes }) {
+    const tok = await this.token({ interactive: true });
+    await loadPicker();
+    const P = window.google.picker;
+    return new Promise((resolve) => {
+      const view = new P.DocsView(P.ViewId.DOCS).setMimeTypes(mimeTypes.join(',')).setIncludeFolders(true).setSelectFolderEnabled(false).setMode(P.DocsViewMode.LIST);
+      new P.PickerBuilder()
+        .addView(view)
+        .enableFeature(P.Feature.MULTISELECT_ENABLED)
+        .setOAuthToken(tok).setDeveloperKey(apiKey).setAppId(this.clientId.split('-')[0])
+        .setTitle('Add books from Google Drive')
+        .setCallback((d) => {
+          const action = d[P.Response.ACTION];
+          if (action === P.Action.PICKED) resolve(d[P.Response.DOCUMENTS].map(x => ({ id: x[P.Document.ID], name: x[P.Document.NAME], mimeType: x[P.Document.MIME_TYPE] || '' })));
+          else if (action === P.Action.CANCEL) resolve([]);
+        })
+        .build().setVisible(true);
+    });
+  }
+
+  // File bytes as a Blob.
+  async download(id) {
+    const tok = await this.token();
+    const res = await fetch(`${API}/files/${encodeURIComponent(id)}?alt=media`, { headers: { Authorization: 'Bearer ' + tok } });
+    if (res.status === 401) { this._token = null; try { sessionStorage.removeItem(TOKEN_KEY); } catch {} throw new DriveError('Signed out of Google', 'auth'); }
+    if (!res.ok) { let msg = res.statusText; try { msg = (await res.json()).error?.message || msg; } catch {} throw new DriveError(msg, 'http' + res.status); }
+    return res.blob();
   }
 
   async findFolder(name, parentId = 'root') {
