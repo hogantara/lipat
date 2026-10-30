@@ -5,24 +5,25 @@ import { Reader, EMOJIS, DEFAULT_PREFS, applyPrefs, isMobile } from './reader.js
 import { Drive, DriveError } from './drive.js';
 import { bookMarkdown, reactionMarkdown, indexMarkdown, allMarksMarkdown, safeName, REACTIONS } from './export.js';
 import { GOOGLE_CLIENT_ID } from './config.js';
-export const BUILD = '2026-10-30.4';
+export const BUILD = '2026-10-30.5';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // ------------------------------------------------------------ toast
-let toastTimer = null;
+let toastTimer = null, toastHideTimer = null;
 function toast(msg, action) {
   const t = $('#toast');
   t.innerHTML = `<span>${esc(msg)}</span>` + (action ? `<button>${esc(action.label)}</button>` : '');
   if (action) t.querySelector('button').onclick = () => { hideToast(); action.fn(); };
+  clearTimeout(toastHideTimer); // a toast shown from a toast's own action must not be hidden by that one's fade-out
   t.hidden = false;
   requestAnimationFrame(() => t.classList.add('show'));
   clearTimeout(toastTimer);
   toastTimer = setTimeout(hideToast, action ? 5000 : 2600);
 }
-function hideToast() { const t = $('#toast'); t.classList.remove('show'); setTimeout(() => { t.hidden = true; }, 250); }
+function hideToast() { const t = $('#toast'); t.classList.remove('show'); toastHideTimer = setTimeout(() => { t.hidden = true; }, 250); }
 
 // ------------------------------------------------------------ state
 const state = { books: [], marks: [], prefs: { ...DEFAULT_PREFS }, libtab: 'shelf', markFilter: '', markBook: '', markQuery: '' };
@@ -151,7 +152,7 @@ async function importFiles(files) {
       if (files.length > 1) await loadAll();
     } catch (e) {
       console.error(e);
-      toast(`Couldn't read ${f.name}`);
+      toast(`Couldn't read ${f.name}`, { label: 'Details', fn: () => toast(String(e?.message || e).slice(0, 160)) });
     }
   }
   prog.hidden = true;
