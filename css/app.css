@@ -1,6 +1,7 @@
 /* ===================== Lipat (mobile-first) =====================
    Shape rule: controls 10px, inputs 10px, surfaces 12px, sheets 20px (top). Covers keep book geometry.
    Color rule: one accent (green) for primary actions, active state and progress. Everything else neutral.
+   Text greys: --ink-2 and --ink-3 both stay at 4.5:1 or more on --bg and --card in every theme.
 */
 :root {
   --font-ui: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -28,10 +29,10 @@
   --rd-align: left;
 }
 
-body[data-theme="paper"] { --bg: #f6f6f4; --bg-2: #ebebe8; --bg-3: #dededa; --ink: #171717; --ink-2: #5f5f5a; --ink-3: #97978f; --line: rgba(23,23,23,.1); --card: #ffffff; --hl-base: 255,214,102; }
-body[data-theme="sepia"] { --bg: #efe8d8; --bg-2: #e5dcc6; --bg-3: #d9ceb2; --ink: #2d2619; --ink-2: #6e6451; --ink-3: #a1957c; --line: rgba(45,38,25,.12); --card: #f8f3e6; --hl-base: 255,200,90; }
-body[data-theme="mist"] { --bg: #e7ebef; --bg-2: #dbe1e7; --bg-3: #ccd4dc; --ink: #1b2229; --ink-2: #566270; --ink-3: #8f9ba8; --line: rgba(27,34,41,.1); --card: #f5f7f9; --hl-base: 255,214,102; }
-body[data-theme="night"] { --bg: #121214; --bg-2: #242428; --bg-3: #313136; --thumb: #3b3b40; --ink: #ebebe6; --ink-2: #a3a39c; --ink-3: #6c6c66; --line: rgba(235,235,230,.1); --card: #1b1b1e; --accent: #4fb87f; --accent-ink: #7ed2a0; --on-accent: #0f1a14; --accent-soft: rgba(79,184,127,.16); --danger: #f0867d; --shadow: 0 10px 30px -10px rgba(0,0,0,.6), 0 1px 2px rgba(0,0,0,.4); --hl-base: 255,190,60; }
+body[data-theme="paper"] { --bg: #f6f6f4; --bg-2: #ebebe8; --bg-3: #dededa; --ink: #171717; --ink-2: #585853; --ink-3: #6f6f6a; --line: rgba(23,23,23,.1); --card: #ffffff; --hl-base: 255,214,102; }
+body[data-theme="sepia"] { --bg: #efe8d8; --bg-2: #e5dcc6; --bg-3: #d9ceb2; --ink: #2d2619; --ink-2: #584f3e; --ink-3: #706652; --line: rgba(45,38,25,.12); --card: #f8f3e6; --hl-base: 255,200,90; }
+body[data-theme="mist"] { --bg: #e7ebef; --bg-2: #dbe1e7; --bg-3: #ccd4dc; --ink: #1b2229; --ink-2: #47525e; --ink-3: #5f6974; --line: rgba(27,34,41,.1); --card: #f5f7f9; --hl-base: 255,214,102; }
+body[data-theme="night"] { --bg: #121214; --bg-2: #242428; --bg-3: #313136; --thumb: #3b3b40; --ink: #ebebe6; --ink-2: #a3a39c; --ink-3: #858580; --line: rgba(235,235,230,.1); --card: #1b1b1e; --accent: #4fb87f; --accent-ink: #7ed2a0; --on-accent: #0f1a14; --accent-soft: rgba(79,184,127,.16); --danger: #f0867d; --shadow: 0 10px 30px -10px rgba(0,0,0,.6), 0 1px 2px rgba(0,0,0,.4); --hl-base: 255,190,60; }
 
 /* ---- base ---- */
 *, *::before, *::after { box-sizing: border-box; }
