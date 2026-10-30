@@ -51,6 +51,11 @@ Any other static HTTPS host works too, as long as its origin is added to the OAu
 - Settings → Google Drive. One-time setup: create an OAuth client ID (type Web application) in
   Google Cloud, enable the Drive API, add the site's origin to Authorized JavaScript origins, paste
   the client ID. Lipat asks only for the `drive.file` scope: it can see and edit only files it created.
+- Add → From Google Drive picks books straight from Drive with the Google Picker, then downloads
+  them through the Drive API. Picking a file grants Lipat access to that file only. One-time setup
+  in the same Cloud project: enable the Google Picker API, create an API key restricted to the
+  Picker API and to the site's origin, and put it in `GOOGLE_API_KEY` in `js/config.js`. Until
+  then Add goes straight to the device file picker.
 - Folder layout in your Drive:
 
   ```
@@ -88,7 +93,7 @@ samples/              demo books
 ```
 
 Libraries load from cdnjs on first use: pdf.js, JSZip, mammoth, marked, DOMPurify. Google
-Identity Services loads only when you connect Drive.
+Identity Services loads only when you connect Drive, and the Google Picker only when you add from Drive.
 
 ## Notes on the PDF reflow
 

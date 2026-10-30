@@ -4,8 +4,8 @@ import { parseFile } from './formats.js';
 import { Reader, EMOJIS, DEFAULT_PREFS, applyPrefs, isMobile } from './reader.js';
 import { Drive, DriveError } from './drive.js';
 import { bookMarkdown, reactionMarkdown, indexMarkdown, allMarksMarkdown, safeName, REACTIONS } from './export.js';
-import { GOOGLE_CLIENT_ID } from './config.js';
-export const BUILD = '2026-10-30.6';
+import { GOOGLE_CLIENT_ID, GOOGLE_API_KEY } from './config.js';
+export const BUILD = '2026-10-30.7';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -167,8 +167,56 @@ async function importFiles(files) {
 }
 $('#file-input').addEventListener('change', (ev) => { importFiles(ev.target.files); ev.target.value = ''; });
 const pickFiles = () => $('#file-input').click();
-$('#btn-add').onclick = pickFiles;
-$('#btn-add-empty').onclick = pickFiles;
+
+// Add: straight to the file picker, or a choice of device or Google Drive once Drive import is set up.
+// Drive import goes through the Google Picker and the Drive API, so it never depends on the phone's
+// Drive app handing over the file (which fails for some files on Android).
+const DRIVE_IMPORT_TYPES = ['application/pdf', 'application/epub+zip', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'text/markdown', 'text/x-markdown', 'text/plain', 'text/html'];
+const driveImportReady = () => !!(GOOGLE_API_KEY && sync.drive);
+function openAddMenu(anchor) {
+  if (!driveImportReady()) return pickFiles();
+  const menu = $('#add-menu');
+  sync.drive.prepare();
+  if (isMobile()) { menu.style.top = menu.style.left = menu.style.right = ''; }
+  else {
+    const r = anchor.getBoundingClientRect();
+    menu.style.top = r.bottom + 6 + 'px';
+    if (r.left > innerWidth / 2) { menu.style.right = innerWidth - r.right + 'px'; menu.style.left = 'auto'; }
+    else { menu.style.left = r.left + 'px'; menu.style.right = 'auto'; }
+  }
+  menu.hidden = false; $('#add-scrim').hidden = !isMobile();
+}
+function closeAddMenu() { $('#add-menu').hidden = true; $('#add-scrim').hidden = true; }
+$('#btn-add').onclick = (ev) => openAddMenu(ev.currentTarget);
+$('#btn-add-empty').onclick = (ev) => openAddMenu(ev.currentTarget);
+$('#add-scrim').onclick = closeAddMenu;
+$('#add-menu [data-add="device"]').onclick = () => { closeAddMenu(); pickFiles(); };
+$('#add-menu [data-add="drive"]').onclick = () => { closeAddMenu(); importFromDrive(); };
+document.addEventListener('pointerdown', (ev) => { if (!$('#add-menu').hidden && !ev.target.closest('#add-menu, #btn-add, #btn-add-empty')) closeAddMenu(); });
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !$('#add-menu').hidden) closeAddMenu(); });
+
+async function importFromDrive() {
+  const details = (e) => ({ label: 'Details', fn: () => toast(String(e?.message || e).slice(0, 160)) });
+  let picked;
+  try { picked = await sync.drive.pick({ apiKey: GOOGLE_API_KEY, mimeTypes: DRIVE_IMPORT_TYPES }); }
+  catch (e) {
+    console.error(e);
+    if (e instanceof DriveError && /popup|access_denied|cancel/i.test(e.code)) toast('Google sign-in was cancelled');
+    else toast("Couldn't open Google Drive", details(e));
+    return;
+  }
+  if (!picked.length) return;
+  const prog = $('#import-progress'), txt = $('#import-text');
+  prog.hidden = false;
+  const files = [];
+  for (const d of picked) {
+    txt.textContent = picked.length > 1 ? `Downloading ${d.name}` : 'Downloading';
+    try { const blob = await sync.drive.download(d.id); files.push(new File([blob], d.name, { type: d.mimeType || blob.type })); }
+    catch (e) { console.error(e); toast(`Couldn't download ${d.name}`, details(e)); }
+  }
+  prog.hidden = true;
+  if (files.length) await importFiles(files);
+}
 
 let dragDepth = 0;
 window.addEventListener('dragenter', (ev) => { if (!ev.dataTransfer?.types?.includes('Files')) return; dragDepth++; $('#drop-overlay').hidden = false; });

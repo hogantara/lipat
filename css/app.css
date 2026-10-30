@@ -318,6 +318,12 @@ body[data-theme="night"] .rd-pages canvas { filter: invert(.9) hue-rotate(180deg
 @keyframes up { from { transform: translateY(40px); opacity: 0; } }
 .sheet-handle { width: 36px; height: 4px; border-radius: 2px; background: var(--bg-3); margin: 2px auto 10px; flex: none; }
 
+.add-menu { gap: 2px; z-index: 31; }
+#add-scrim { z-index: 30; }
+.menu-item { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 48px; padding: 10px 12px; border-radius: var(--r); font-size: 15px; color: var(--ink); text-align: left; transition: background .15s; }
+.menu-item:hover { background: var(--bg-2); }
+.menu-item .ph { font-size: 22px; color: var(--ink-2); }
+
 .mark-editor { gap: 10px; }
 .mark-editor .emoji-row { justify-content: space-around; }
 .me-quote { margin: 0; font-family: var(--font-serif); font-size: 14px; color: var(--ink-2); border-left: 2px solid var(--accent); padding: 2px 10px; max-height: 92px; overflow: auto; line-height: 1.45; }
@@ -408,6 +414,7 @@ body[data-theme="night"] .rd-pages canvas { filter: invert(.9) hue-rotate(180deg
   .zoom-ctl { bottom: 70px; right: 18px; }
   .sheet { position: absolute; left: auto; bottom: auto; border-radius: var(--r-m); border: 1px solid var(--line); box-shadow: var(--shadow); animation: pop .18s var(--ease); max-height: none; padding: 12px 14px; }
   .sheet-handle { display: none; }
+  .add-menu { position: fixed; width: 240px; padding: 6px; }
   .panel { top: 12px; right: 12px; bottom: 12px; width: 360px; height: auto; animation: slide .25s var(--ease); }
   @keyframes slide { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
   .panel-tabs { padding: 0 0 6px; }

@@ -138,6 +138,14 @@
   </nav>
 
   <div id="drop-overlay" class="drop-overlay" hidden><div>Drop to add</div></div>
+
+  <!-- add books: where from (shown only when Drive import is set up) -->
+  <div id="add-scrim" class="scrim" hidden></div>
+  <div id="add-menu" class="add-menu sheet" role="menu" aria-label="Add books" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <button class="menu-item" role="menuitem" data-add="device"><i class="ph ph-folder-open" aria-hidden="true"></i>From this device</button>
+    <button class="menu-item" role="menuitem" data-add="drive"><i class="ph ph-google-drive-logo" aria-hidden="true"></i>From Google Drive</button>
+  </div>
 </section>
 
 <!-- ========== READER ========== -->
