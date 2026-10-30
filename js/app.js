@@ -1,11 +1,11 @@
 // App shell: shelf, import, global marks view, settings, Google Drive sync, PWA plumbing.
 import { db, uid } from './db.js';
-import { parseFile } from './formats.js';
+import { parseFile, safeCover } from './formats.js';
 import { Reader, EMOJIS, DEFAULT_PREFS, applyPrefs, isMobile } from './reader.js';
 import { Drive, DriveError } from './drive.js';
 import { bookMarkdown, reactionMarkdown, indexMarkdown, allMarksMarkdown, safeName, REACTIONS } from './export.js';
 import { GOOGLE_CLIENT_ID, GOOGLE_API_KEY } from './config.js';
-export const BUILD = '2026-10-30.7';
+export const BUILD = '2026-10-30.8';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -31,8 +31,17 @@ const sync = { settings: { clientId: '', connected: false, folders: null, files:
 let reader = null;
 const coverUrls = new Map();
 
+// covers stored before formats.js checked them may hold script (SVG, HTML): only raster types get a URL, the rest are redrawn once
 function coverUrl(book) {
   if (!book.cover) return null;
+  if (!/^image\/(jpeg|png|gif|webp|avif|bmp)$/.test(book.cover.type)) {
+    const old = book.cover; book.cover = null;
+    old.arrayBuffer().then(b => safeCover(new Uint8Array(b))).then(c => {
+      db.updateBook(book.id, { cover: c });
+      if (c) { book.cover = c; renderShelf(); }
+    }).catch(() => {});
+    return null;
+  }
   if (!coverUrls.has(book.id)) coverUrls.set(book.id, URL.createObjectURL(book.cover));
   return coverUrls.get(book.id);
 }
@@ -252,7 +261,7 @@ function filteredMarks() {
 }
 function markOrder(m) {
   const si = Number(String(m.sectionId || 's0').slice(1)) || 0;
-  return si * 1e7 + (m.type === 'bookmark' ? (m.blockIndex || 0) * 1e3 : (m.start || 0));
+  return si * 1e7 + (m.type === 'bookmark' ? ((m.blockIndex || 0) + (m.frac || 0)) * 1e3 : (m.start || 0));
 }
 function renderMarksTab() {
   const bookById = Object.fromEntries(state.books.map(b => [b.id, b]));

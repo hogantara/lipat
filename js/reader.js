@@ -18,6 +18,17 @@ export const isMobile = () => window.innerWidth < 760;
 const isTouch = () => matchMedia('(pointer: coarse)').matches;
 // rAF never fires in a hidden tab; don't let opening a book hang on it.
 const nextFrame = () => new Promise(r => { let done = false; const go = () => { if (!done) { done = true; r(); } }; requestAnimationFrame(go); setTimeout(go, 60); });
+// lone wrappers around a chapter body; see Reader._blocks
+const WRAPPER = /^(DIV|SECTION|ARTICLE|MAIN)$/;
+// Touch word lookup. Text in two blocks (or either side of a <br>) never forms one word, though
+// textContent joins it with nothing between. Word characters include combining marks (Indic vowel
+// signs and virama, harakat, niqqud, decomposed accents) and joiners, so a word keeps its clusters.
+// Scripts written without spaces (Thai, CJK...) are split into words by Intl.Segmenter.
+const BLOCK = /^(ADDRESS|ARTICLE|ASIDE|BLOCKQUOTE|CAPTION|DD|DIV|DL|DT|FIGCAPTION|FIGURE|FOOTER|H[1-6]|HEADER|HR|LI|MAIN|NAV|OL|P|PRE|SECTION|TABLE|TD|TH|TR|UL)$/i;
+const WORD = /[\p{L}\p{N}\p{M}‌‍’'-]/u;
+const NOSPACE = /[\p{sc=Thai}\p{sc=Lao}\p{sc=Khmer}\p{sc=Myanmar}\p{sc=Han}\p{sc=Hiragana}\p{sc=Katakana}]/u;
+let wordSeg;
+const breakCache = new WeakMap();
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 export const DEFAULT_PREFS = { size: 19, font: 'serif', lh: '1.65', measure: '36', theme: 'paper', align: 'left' };
@@ -160,20 +171,23 @@ export class Reader {
   async open(book) {
     this.book = book;
     this.view.hidden = false;
-    $('#rd-loading').hidden = false;
+    $('#rd-loading').hidden = false; $('#rd-loading').classList.remove('under-bars');
     $('#rd-book-title').textContent = book.title;
     $('#rd-chapter').textContent = '';
     document.body.classList.remove('chrome-hidden');
     this.closeEditor(); this.hideBubble(); this.panel.hidden = true; this.typePop.hidden = true;
     this.marks = await db.marksForBook(book.id);
+    if (this.book !== book) return;
     this.textCache.clear();
     await nextFrame();
+    if (this.book !== book) return;
     this._render();
     $$('[data-act="layout"]', this.view).forEach(b => { b.hidden = book.format !== 'pdf'; b.classList.remove('is-on'); });
     this.pageMode = false; this.pagesEl.hidden = true; this.content.hidden = false;
     this._removeZoomCtl();
     this.renderToc(); this.renderMarksList();
     await nextFrame();
+    if (this.book !== book) return;
     this._restorePosition();
     $('#rd-loading').hidden = true;
     if (book.isScanned) { this.toast('No text layer in this PDF. Showing pages instead.'); this.setPageMode(true); }
@@ -186,6 +200,8 @@ export class Reader {
     this._savePosition(true);
     this.view.hidden = true;
     this.content.innerHTML = ''; this.pagesEl.innerHTML = '';
+    if (this.pageObserver) this.pageObserver.disconnect();
+    this._removeZoomCtl();
     this.sectionEls.clear(); this.book = null; this.pdf = null;
     this.onBack();
   }
@@ -196,7 +212,7 @@ export class Reader {
     const first = book.sections[0];
     const ownCover = first && /<img/i.test(first.html) && first.html.replace(/<[^>]+>/g, '').trim().length < 80;
     if (book.coverUrl && book.format !== 'pdf' && !ownCover) parts.push(`<div class="cover-page"><img src="${book.coverUrl}" alt=""></div>`);
-    if (book.format === 'pdf' || book.format === 'txt') parts.push(`<div class="title-block"><h1>${esc(book.title)}</h1>${book.author ? `<p>${esc(book.author)}</p>` : ''}</div>`);
+    if (book.format === 'pdf' || book.format === 'txt') parts.push(`<div class="title-block" dir="auto"><h1>${esc(book.title)}</h1>${book.author ? `<p>${esc(book.author)}</p>` : ''}</div>`);
     for (const s of book.sections) parts.push(`<section data-sid="${s.id}">${s.html}</section>`);
     this.content.innerHTML = parts.join('');
     this.sectionEls.clear();
@@ -212,21 +228,44 @@ export class Reader {
   }
 
   // ------------------------------------------------------------ position
+  // Blocks of a section: its children, or the children of a lone wrapper (<div class="chapter">,
+  // <section epub:type="chapter">, <main><article>), so a wrapped chapter is not one big block.
+  // depth counts the wrappers; anchors saved before it existed have none and index el.children.
+  _blocks(el) {
+    let blocks = Array.from(el.children), depth = 0;
+    while (blocks.length === 1 && WRAPPER.test(blocks[0].tagName)) {
+      // only a wrapper of real blocks: loose text or <br>s mean its children are inline (em, a, mark, br)
+      const w = blocks[0];
+      if ([...w.childNodes].some(n => n.nodeType === 3 && n.data.trim() || n.nodeName === 'BR')) break;
+      // a bookmark pin is not a block
+      const inner = Array.from(w.children).filter(c => !c.classList.contains('bm-pin'));
+      if (!inner.length || inner.length === 1 && !WRAPPER.test(inner[0].tagName)) break;
+      blocks = inner; depth++;
+    }
+    return { blocks, depth };
+  }
+  _blockAt(el, a) { return a.depth ? this._blocks(el).blocks[a.blockIndex] : el.children[a.blockIndex]; }
+  // A bookmark from before depth existed, at block 0 of a wrapped chapter, is on the wrapper: read it as the chapter's first block.
+  _bmBlock(el, m) {
+    if (!m.depth && !m.blockIndex) { const { blocks, depth } = this._blocks(el); if (depth) return blocks[0]; }
+    return this._blockAt(el, m);
+  }
+  _topOf(el) { return el.getBoundingClientRect().top - this.scroller.getBoundingClientRect().top + this.scroller.scrollTop; }
   _visibleAnchor() {
     // first block whose bottom is below the top of the viewport (+ header offset)
     const top = this.scroller.getBoundingClientRect().top + 70;
     for (const [sid, el] of this.sectionEls) {
       const r = el.getBoundingClientRect();
       if (r.bottom < top) continue;
-      const blocks = Array.from(el.children);
+      const { blocks, depth } = this._blocks(el);
       for (let i = 0; i < blocks.length; i++) {
         const b = blocks[i].getBoundingClientRect();
         if (b.bottom >= top && b.height > 0) {
           const frac = clamp((top - b.top) / b.height, 0, 1);
-          return { sectionId: sid, blockIndex: i, frac, el: blocks[i] };
+          return { sectionId: sid, blockIndex: i, frac, depth, el: blocks[i] };
         }
       }
-      return { sectionId: sid, blockIndex: 0, frac: 0, el: blocks[0] };
+      return { sectionId: sid, blockIndex: 0, frac: 0, depth, el: blocks[0] };
     }
     return null;
   }
@@ -234,8 +273,8 @@ export class Reader {
     if (!a) return;
     this._progScrollAt = Date.now();
     const el = this.sectionEls.get(a.sectionId); if (!el) return;
-    const block = el.children[a.blockIndex] || el;
-    const y = block.offsetTop + (a.frac || 0) * block.offsetHeight - 70;
+    const block = this._blockAt(el, a) || el;
+    const y = this._topOf(block) + (a.frac || 0) * block.offsetHeight - 70;
     this.scroller.scrollTo({ top: Math.max(0, y), behavior });
   }
   _savePosition(now = false) {
@@ -243,10 +282,13 @@ export class Reader {
     clearTimeout(this.saveTimer);
     const run = () => {
       if (!this.book) return;
-      const a = this.pageMode ? null : this._visibleAnchor();
+      const paged = this.pageMode && !this.pagesEl.hidden;
+      const a = paged ? null : this._visibleAnchor();
       const max = this.scroller.scrollHeight - this.scroller.clientHeight;
       const pct = max > 0 ? this.scroller.scrollTop / max : 0;
-      const patch = { progress: { ...(a ? { sectionId: a.sectionId, blockIndex: a.blockIndex, frac: a.frac } : this.book.progress || {}), pct: this.pageMode ? (this.book.progress?.pct || 0) : pct, page: this.currentPage || null } };
+      // original layout: the page is the position (the reflow anchor is still where L was pressed)
+      const n = this.book.pageCount || 1, pg = this.currentPage || 1;
+      const patch = { progress: paged ? { page: pg, pct: n > 1 ? (pg - 1) / (n - 1) : 0 } : { ...(a ? { sectionId: a.sectionId, blockIndex: a.blockIndex, frac: a.frac, depth: a.depth } : this.book.progress || {}), pct, page: this.currentPage || null } };
       Object.assign(this.book, patch);
       db.updateBook(this.book.id, patch);
     };
@@ -254,8 +296,13 @@ export class Reader {
   }
   _restorePosition() {
     const p = this.book.progress;
+    this.currentPage = this.book.format === 'pdf' ? p?.page || null : null;
     if (p && p.sectionId) this._scrollToAnchor(p);
-    else this.scroller.scrollTop = 0;
+    else {
+      this.scroller.scrollTop = 0;
+      // left in original layout, or a scan (no anchor): that page, here or once the pages show
+      if (p && p.page) this.gotoPage(p.page);
+    }
   }
 
   // ------------------------------------------------------------ scroll / chrome
@@ -272,6 +319,7 @@ export class Reader {
       else if (dy < 0) document.body.classList.remove('chrome-hidden');
     }
     this.lastScroll = st;
+    if (this.pageMode) this._syncPage();
     if (!this.pending) this.bubble.hidden = true;
     this._updateMeta();
     this._savePosition();
@@ -282,7 +330,12 @@ export class Reader {
     const max = this.scroller.scrollHeight - this.scroller.clientHeight;
     const pct = max > 0 ? this.scroller.scrollTop / max : 1;
     if (this.pageMode) {
-      posEl.textContent = `Page ${this.currentPage || 1} of ${this.book.pageCount}`;
+      const cur = this.currentPage || 1;
+      posEl.textContent = `Page ${cur} of ${this.book.pageCount}`;
+      // chapter: the last section starting on or before this page
+      let sec = null;
+      for (const s of this.book.sections) { if ((s.startPage || 1) <= cur) sec = s; else break; }
+      $('#rd-chapter').textContent = sec?.title || '';
       leftEl.textContent = '';
       return;
     }
@@ -310,15 +363,15 @@ export class Reader {
 
   // ------------------------------------------------------------ prefs
   setPref(key, value) {
+    // keep the reader anchored on the same block: measure it before the new prefs reflow the page
+    if (this._anchorBeforePref) clearTimeout(this._anchorBeforePref.t);
+    const a = this._lastAnchor || this._visibleAnchor();
+    this._lastAnchor = a;
     this.prefs[key] = value;
     applyPrefs(this.prefs);
     this.content.dataset.align = this.prefs.align;
     this._syncTypeUI();
     db.setSetting('prefs', this.prefs);
-    // keep the reader anchored on the same block
-    if (this._anchorBeforePref) clearTimeout(this._anchorBeforePref.t);
-    const a = this._lastAnchor || this._visibleAnchor();
-    this._lastAnchor = a;
     requestAnimationFrame(() => { this._scrollToAnchor(a); this._anchorBeforePref = { t: setTimeout(() => { this._lastAnchor = null; }, 500) }; });
   }
   _syncTypeUI() {
@@ -326,13 +379,15 @@ export class Reader {
     const map = { 'font-family': 'font', 'line-height': 'lh', 'measure': 'measure', 'theme-seg': 'theme', 'justify': 'align' };
     for (const [id, key] of Object.entries(map)) $$('#' + id + ' button').forEach(b => b.classList.toggle('is-active', b.dataset.v === String(this.prefs[key])));
   }
-  togglePop() { this.typePop.hidden = !this.typePop.hidden; if (!this.typePop.hidden) { this.panel.hidden = true; this.closeEditor(); } this._syncScrim(); }
+  togglePop() { this.typePop.hidden = !this.typePop.hidden; if (!this.typePop.hidden) { this.panel.hidden = true; this.closeEditor(); if (this.pending) this.hideBubble(); } this._syncScrim(); }
   _syncScrim() { this.scrim.hidden = !isMobile() || (this.panel.hidden && this.typePop.hidden && this.editor.hidden); }
 
   // ------------------------------------------------------------ panel
   togglePanel(tab, focusSearch = false) {
     if (tab === null || (!this.panel.hidden && this.activeTab === tab)) { this.panel.hidden = true; this._syncScrim(); return; }
     this.panel.hidden = false; this.typePop.hidden = true; this.closeEditor();
+    // a pending long-press selection would float its bubble over the sheet (a desktop selection stays usable)
+    if (this.pending) this.hideBubble();
     this.showPanelTab(tab);
     this._syncScrim();
     if (focusSearch) { const si = $('#search-input'); si.focus(); si.select(); }
@@ -362,7 +417,7 @@ export class Reader {
     this._progScrollAt = Date.now();
     let target = el;
     if (anchor) { const a = el.querySelector(`#${CSS.escape(anchor)}`) || el.querySelector(`[name="${CSS.escape(anchor)}"]`); if (a) target = a; }
-    const y = target.offsetTop - 70;
+    const y = this._topOf(target) - 70;
     this.scroller.scrollTo({ top: Math.max(0, y), behavior });
     document.body.classList.remove('chrome-hidden');
   }
@@ -376,7 +431,7 @@ export class Reader {
     if (this.pageMode) { const w = this.pagesEl.querySelector(`[data-page="${n}"]`); if (w) this.scroller.scrollTo({ top: w.offsetTop - 60, behavior }); return; }
     let el = this.content.querySelector(`#pg${n}`);
     for (let k = n - 1; !el && k >= 1 && k >= n - 20; k--) el = this.content.querySelector(`#pg${k}`);
-    if (el) this.scroller.scrollTo({ top: el.offsetTop - 70, behavior });
+    if (el) this.scroller.scrollTo({ top: this._topOf(el) - 70, behavior });
   }
 
   // ------------------------------------------------------------ search
@@ -410,7 +465,7 @@ export class Reader {
     const el = this.sectionEls.get(h.sid);
     const wrapped = wrapTextRange(el, h.start, h.end, () => { const s = document.createElement('span'); s.className = 'search-hit'; return s; });
     this._progScrollAt = Date.now();
-    if (wrapped[0]) { this.scroller.scrollTo({ top: wrapped[0].offsetTop - this.scroller.clientHeight / 3, behavior: 'smooth' }); }
+    if (wrapped[0]) { this.scroller.scrollTo({ top: this._topOf(wrapped[0]) - this.scroller.clientHeight / 3, behavior: 'smooth' }); }
     document.body.classList.remove('chrome-hidden');
   }
 
@@ -457,7 +512,7 @@ export class Reader {
       clearTimeout(timer);
       timer = setTimeout(() => {
         const at = this._offsetAt(t0.x, t0.y); if (!at) return;
-        const w = this._wordAround(at.secEl, at.off); if (!w) return;
+        const w = this._wordAround(at.secEl, at.off, at.hit); if (!w) return;
         selecting = true; anchor = { ...at, ...w };
         this.hideBubble();
         this._setPending(anchor.sid, w.start, w.end, anchor.node);
@@ -473,7 +528,7 @@ export class Reader {
       raf = requestAnimationFrame(() => {
         raf = 0;
         const at = this._offsetAt(lastPt.x, lastPt.y); if (!at || at.sid !== anchor.sid) return;
-        const w = this._wordAround(at.secEl, at.off) || { start: at.off, end: at.off };
+        const w = this._wordAround(at.secEl, at.off, at.hit) || { start: at.off, end: at.off };
         this._setPending(anchor.sid, Math.min(anchor.start, w.start), Math.max(anchor.end, w.end), anchor.node);
       });
     }, { passive: false });
@@ -495,24 +550,76 @@ export class Reader {
     const el = node.parentNode; if (!this.content.contains(el)) return null;
     const secEl = el.closest('section[data-sid]'); if (!secEl) return null;
     const pre = document.createRange(); pre.selectNodeContents(secEl); pre.setEnd(node, offset);
-    return { sid: secEl.dataset.sid, secEl, node, off: pre.toString().length };
+    const off = pre.toString().length;
+    // hit: the character under the finger. The caret lands after it when the press is on its right
+    // half, or at the end of a block's last text node.
+    let before = offset === node.data.length;
+    if (!before && offset > 0) {
+      const k = offset > 1 && /[\ud800-\udbff][\udc00-\udfff]/.test(node.data.slice(offset - 2, offset)) ? 2 : 1;
+      const r = document.createRange(); r.setStart(node, offset - k); r.setEnd(node, offset);
+      const b = r.getBoundingClientRect(); before = x >= b.left && x <= b.right && y >= b.top && y <= b.bottom;
+    }
+    return { sid: secEl.dataset.sid, secEl, node, off, hit: before && off > 0 ? off - 1 : off };
   }
-  _wordAround(secEl, off) {
+  // Offsets in the section's textContent where one block ends and the next starts, or a <br> sits.
+  // Marks and search hits only split text nodes, so these stay valid while the text is unchanged.
+  _breaks(secEl, t = secEl.textContent) {
+    const c = breakCache.get(secEl); if (c && c.len === t.length) return c.at;
+    const at = [], walker = document.createTreeWalker(secEl, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    const blockOf = (n) => { let e = n.parentNode; while (e !== secEl && !BLOCK.test(e.tagName)) e = e.parentNode; return e; };
+    let pos = 0, prev = null, n;
+    const add = () => { if (at[at.length - 1] !== pos) at.push(pos); };
+    while ((n = walker.nextNode())) {
+      if (n.nodeType === 1) { if (/^BR$/i.test(n.tagName)) add(); continue; }
+      if (!n.data.length) continue;
+      const blk = blockOf(n);
+      if (prev && blk !== prev) add();
+      prev = blk; pos += n.data.length;
+    }
+    breakCache.set(secEl, { len: t.length, at });
+    return at;
+  }
+  // Section text from start to end with a newline at each block break.
+  _textOf(secEl, start, end, t = secEl.textContent) {
+    let out = '', from = start;
+    for (const x of this._breaks(secEl, t)) if (x > start && x < end) { out += t.slice(from, x) + '\n'; from = x; }
+    return out + t.slice(from, end);
+  }
+  _wordAround(secEl, off, hit = off) {
     const t = secEl.textContent;
-    const w = (ch) => !!ch && /[\p{L}\p{N}\u2019'-]/u.test(ch);
+    // stay inside the block (between breaks) that holds the character under the finger
+    let lo = 0, hi = t.length;
+    for (const x of this._breaks(secEl, t)) { if (x <= hit) lo = x; else { hi = x; break; } }
+    off = clamp(off, lo, hi);
+    const cp = (i) => String.fromCodePoint(t.codePointAt(i));
     let s = off, e = off;
-    while (s > 0 && w(t[s - 1])) s--;
-    while (e < t.length && w(t[e])) e++;
-    return s < e ? { start: s, end: e } : null;
+    while (s > lo) { const k = s - lo > 1 && /[\ud800-\udbff][\udc00-\udfff]/.test(t.slice(s - 2, s)) ? 2 : 1; if (!WORD.test(cp(s - k))) break; s -= k; }
+    while (e < hi && WORD.test(cp(e))) e += cp(e).length;
+    if (s >= e) return null;
+    if (NOSPACE.test(t.slice(s, e)) && window.Intl && Intl.Segmenter) {
+      wordSeg = wordSeg || new Intl.Segmenter(undefined, { granularity: 'word' });
+      const k = clamp(hit, s, e - 1) - s;
+      for (const g of wordSeg.segment(t.slice(s, e))) {
+        if (k >= g.index + g.segment.length) continue;
+        if (g.isWordLike) return { start: s + g.index, end: s + g.index + g.segment.length };
+        break;
+      }
+    }
+    return { start: s, end: e };
   }
   _setPending(sid, start, end, node) {
     if (this.pending && this.pending.sectionId === sid && this.pending.start === start && this.pending.end === end) return;
     const secEl = this.sectionEls.get(sid); if (!secEl) return;
-    const raw = secEl.textContent.slice(start, end);
+    const t = secEl.textContent;
+    // never end inside a grapheme cluster: the mark and its emoji would split it
+    while (start > 0 && /\p{M}/u.test(t[start])) start--;
+    while (end < t.length && /\p{M}/u.test(t[end])) end++;
+    const raw = t.slice(start, end);
     const lead = raw.length - raw.trimStart().length, clean = raw.trim();
     if (!clean) return;
     this._clearPending();
-    this.pending = { sectionId: sid, start: start + lead, end: start + lead + clean.length, text: clean.replace(/\s+/g, ' '), page: node ? this._pageAtNode(node) : null };
+    const s = start + lead, e = s + clean.length;
+    this.pending = { sectionId: sid, start: s, end: e, text: this._textOf(secEl, s, e, t).trim().replace(/\s+/g, ' '), page: node ? this._pageAtNode(node) : null };
     this.pendingEls = wrapTextRange(secEl, this.pending.start, this.pending.end, () => { const mk = document.createElement('mark'); mk.className = 'hl pending'; mk.dataset.emoji = ''; mk.dataset.note = '0'; return mk; });
   }
 
@@ -560,7 +667,8 @@ export class Reader {
     const trimmedLead = text.length - text.trimStart().length;
     const clean = text.trim();
     if (!clean) return null;
-    return { sectionId: secEl.dataset.sid, start: start + trimmedLead, end: start + trimmedLead + clean.length, text: clean.replace(/\s+/g, ' '), page: this._pageAtNode(range.startContainer) };
+    const s = start + trimmedLead, e = s + clean.length;
+    return { sectionId: secEl.dataset.sid, start: s, end: e, text: this._textOf(secEl, s, e).replace(/\s+/g, ' '), page: this._pageAtNode(range.startContainer) };
   }
   _pageAtNode(node) {
     if (this.book.format !== 'pdf') return null;
@@ -588,8 +696,14 @@ export class Reader {
   _paintMark(m) {
     const el = this.sectionEls.get(m.sectionId); if (!el) return [];
     if (m.type === 'bookmark') {
-      const block = el.children[m.blockIndex]; if (block) { block.classList.add('bm-anchor'); block.dataset.bm = m.id; }
-      return block ? [block] : [];
+      const block = this._bmBlock(el, m); if (!block) return [];
+      // inside a block taller than the screen: a pin at that height, so one paragraph can hold several
+      if (m.frac) {
+        const pin = document.createElement('span'); pin.className = 'bm-pin'; pin.dataset.bm = m.id; pin.style.top = (m.frac * 100) + '%';
+        block.classList.add('bm-in'); block.appendChild(pin); return [pin];
+      }
+      block.classList.add('bm-anchor'); block.dataset.bm = m.id;
+      return [block];
     }
     const els = wrapTextRange(el, m.start, m.end, () => {
       const mk = document.createElement('mark'); mk.className = 'hl'; mk.dataset.id = m.id;
@@ -599,7 +713,12 @@ export class Reader {
     return els;
   }
   _unpaintMark(m) {
-    if (m.type === 'bookmark') { const b = this.content.querySelector(`[data-bm="${m.id}"]`); if (b) { b.classList.remove('bm-anchor'); delete b.dataset.bm; } return; }
+    if (m.type === 'bookmark') {
+      const b = this.content.querySelector(`[data-bm="${m.id}"]`); if (!b) return;
+      if (b.classList.contains('bm-pin')) { const p = b.parentNode; b.remove(); if (!p.querySelector(':scope > .bm-pin')) p.classList.remove('bm-in'); }
+      else { b.classList.remove('bm-anchor'); delete b.dataset.bm; }
+      return;
+    }
     $$(`mark.hl[data-id="${m.id}"]`, this.content).forEach(mk => { const p = mk.parentNode; while (mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); });
   }
   _refreshMarkEls(m) {
@@ -654,10 +773,21 @@ export class Reader {
   async toggleBookmark() {
     if (this.pageMode) { this.toast('Switch to reading view to bookmark.'); return; }
     const a = this._visibleAnchor(); if (!a) return;
-    const existing = this.marks.find(m => m.type === 'bookmark' && m.sectionId === a.sectionId && m.blockIndex === a.blockIndex);
+    const sec = this.sectionEls.get(a.sectionId), h = a.el ? a.el.offsetHeight : 0, screen = this.scroller.clientHeight;
+    // half a screen or more into a long block, the bookmark keeps where in it; a bookmark within a screen of here is this one
+    // (one from before frac was stored has no frac and stands for its whole block, or its whole wrapped chapter if it has no depth)
+    const tall = a.frac * h > screen / 2;
+    const legacy = (m) => m.frac === undefined && (a.depth && !m.depth || this._bmBlock(sec, m) === a.el);
+    const existing = this.marks.find(m => m.type === 'bookmark' && m.sectionId === a.sectionId && (legacy(m) || m.frac !== undefined && this._bmBlock(sec, m) === a.el && Math.abs((m.frac - (tall ? a.frac : 0)) * h) < screen));
     if (existing) { await this.deleteMark(existing); return; }
-    const snippet = (a.el?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 140);
-    const m = { id: uid(), bookId: this.book.id, type: 'bookmark', emoji: null, note: '', createdAt: Date.now(), sectionId: a.sectionId, blockIndex: a.blockIndex, text: snippet, page: this.currentPage || null };
+    let text = a.el?.textContent || '';
+    if (tall) {
+      // the snippet starts at the line at the top of the screen
+      const r = a.el.getBoundingClientRect(), at = this._offsetAt(r.left + 1, this.scroller.getBoundingClientRect().top + 76);
+      if (at && a.el.contains(at.node)) { const w = this._wordAround(at.secEl, at.off); text = at.secEl.textContent.slice(w ? w.start : at.off, (w ? w.start : at.off) + 400); }
+    }
+    const snippet = text.replace(/\s+/g, ' ').trim().slice(0, 140);
+    const m = { id: uid(), bookId: this.book.id, type: 'bookmark', emoji: null, note: '', createdAt: Date.now(), sectionId: a.sectionId, blockIndex: a.blockIndex, ...(a.depth ? { depth: a.depth } : {}), frac: tall ? Math.round(a.frac * 1e5) / 1e5 : 0, text: snippet, page: this.currentPage || null };
     this.marks.push(m);
     await db.putMark(m);
     this._paintMark(m);
@@ -680,16 +810,18 @@ export class Reader {
   }
   _markOrder(m) {
     const si = Number(String(m.sectionId || 's0').slice(1)) || 0;
-    return si * 1e7 + (m.type === 'bookmark' ? m.blockIndex * 1e3 : m.start);
+    return si * 1e7 + (m.type === 'bookmark' ? (m.blockIndex + (m.frac || 0)) * 1e3 : m.start);
   }
   gotoMark(m, openEditor = false) {
     if (!m) return;
+    // edit the reader's own copy (the library Marks tab passes its own object)
+    m = this.marks.find(x => x.id === m.id) || m;
     if (this.pageMode) this.setPageMode(false);
     let el = m.type === 'bookmark' ? this.content.querySelector(`[data-bm="${m.id}"]`) : this.content.querySelector(`mark.hl[data-id="${m.id}"]`);
-    if (!el) { const sec = this.sectionEls.get(m.sectionId); el = sec ? (sec.children[m.blockIndex] || sec) : null; }
+    if (!el) { const sec = this.sectionEls.get(m.sectionId); el = sec ? (this._bmBlock(sec, m) || sec) : null; }
     if (!el) return;
     this._progScrollAt = Date.now();
-    this.scroller.scrollTo({ top: el.offsetTop - this.scroller.clientHeight / 3, behavior: 'smooth' });
+    this.scroller.scrollTo({ top: this._topOf(el) - this.scroller.clientHeight / 3, behavior: 'smooth' });
     el.classList.add('flash'); setTimeout(() => el.classList.remove('flash'), 1700);
     document.body.classList.remove('chrome-hidden');
     if (openEditor) setTimeout(() => this.openEditor(m, el), 450);
@@ -698,25 +830,45 @@ export class Reader {
   // ------------------------------------------------------------ PDF page mode
   async setPageMode(on) {
     if (this.book.format !== 'pdf' || on === this.pageMode) return;
-    const page = this.currentPage || 1;
+    const book = this.book, page = this.currentPage || 1;
     this.pageMode = on;
     $$('[data-act="layout"]', this.view).forEach(b => b.classList.toggle('is-on', on));
     this.hideBubble(); this.closeEditor();
     if (on) {
-      $('#rd-loading').hidden = false;
-      if (!this.pdf) {
-        const pdfjs = await getPdfjs();
-        const blob = await db.getFile(this.book.id);
-        this.pdf = await pdfjs.getDocument({ data: await blob.arrayBuffer() }).promise;
+      // the overlay sits under the top bar, so Back stays in reach while pdf.js loads
+      $('#rd-loading').hidden = false; $('#rd-loading').classList.add('under-bars'); document.body.classList.remove('chrome-hidden');
+      let missing = false;
+      try {
+        if (!this.pdf) {
+          const pdfjs = await getPdfjs();
+          const blob = await db.getFile(book.id);
+          if (!blob) { missing = true; throw new Error('No original file for ' + book.id); }
+          const pdf = await pdfjs.getDocument({ data: await blob.arrayBuffer() }).promise;
+          // closed while the file loaded
+          if (this.book !== book) { pdf.destroy(); return; }
+          this.pdf = pdf;
+        }
+        // L pressed again while loading: the reading view is already back
+        if (!this.pageMode) return;
+        this.content.hidden = true; this.pagesEl.hidden = false;
+        await this._layoutPages();
+        if (this.book !== book || !this.pageMode) return;
+        this._addZoomCtl();
+        $('#rd-loading').hidden = true;
+        this.gotoPage(page);
+        document.body.classList.remove('chrome-hidden');
+        this.toast('Original layout. Reactions and notes live in the reading view.');
+      } catch (e) {
+        // pdf.js or its worker didn't load, or the original file is gone: stay in the reading view
+        if (this.book !== book) return;
+        console.warn('original layout', e);
+        this.pageMode = on = false;
+        $$('[data-act="layout"]', this.view).forEach(b => b.classList.remove('is-on'));
+        this.toast(missing ? 'The original PDF is missing. Add it again to see its pages.' : "Couldn't load the original pages. Check your connection and try again.");
       }
-      this.content.hidden = true; this.pagesEl.hidden = false;
-      await this._layoutPages();
-      this._addZoomCtl();
+    }
+    if (!on) {
       $('#rd-loading').hidden = true;
-      this.gotoPage(page);
-      document.body.classList.remove('chrome-hidden');
-      this.toast('Original layout. Reactions and notes live in the reading view.');
-    } else {
       this.pagesEl.hidden = true; this.content.hidden = false; this.pagesEl.innerHTML = '';
       if (this.pageObserver) this.pageObserver.disconnect();
       this._removeZoomCtl();
@@ -726,12 +878,19 @@ export class Reader {
   }
   async _layoutPages() {
     if (!this.pdf) return;
-    const keepPage = this.currentPage || 1;
+    // resize events overlap; only the latest call builds the pages
+    const gen = this._layoutGen = (this._layoutGen || 0) + 1;
+    const first = await this.pdf.getPage(1);
+    if (gen !== this._layoutGen || !this.pdf || !this.pageMode) return;
+    // keep the same spot of the same page in view across zoom and resize
+    const at = this._pageAnchor();
+    const keepPage = at ? at.n : this.currentPage || 1;
+    for (const w of this.pagesEl.children) this._releasePage(w);
     this.pagesEl.innerHTML = '';
     if (this.pageObserver) this.pageObserver.disconnect();
-    const first = await this.pdf.getPage(1);
     const base = first.getViewport({ scale: 1 });
-    const avail = Math.min(this.scroller.clientWidth - 32, 900);
+    const sc = this.scroller;
+    const avail = Math.min(sc.clientWidth - 32, 900);
     const scale = (avail / base.width) * this.zoom;
     const wraps = [];
     for (let i = 1; i <= this.pdf.numPages; i++) {
@@ -742,33 +901,77 @@ export class Reader {
       const n = document.createElement('div'); n.className = 'pgnum'; n.textContent = i; w.appendChild(n);
       this.pagesEl.appendChild(w); wraps.push(w);
     }
-    this.pageObserver = new IntersectionObserver((entries) => {
-      for (const e of entries) {
-        const w = e.target;
-        if (e.isIntersecting) { this._renderPage(Number(w.dataset.page), w, scale); if (e.intersectionRatio > 0.3) this.currentPage = Number(w.dataset.page); }
-      }
+    // Render pages as they come near and release them two screens away: a bitmap per page read
+    // adds up to gigabytes in a long scan. The current page is the one under a line 30% down.
+    const render = new IntersectionObserver((entries) => {
+      for (const e of entries) if (e.isIntersecting && e.target.isConnected) this._renderPage(Number(e.target.dataset.page), e.target, scale);
+    }, { root: sc, rootMargin: '600px 0px' });
+    const release = new IntersectionObserver((entries) => {
+      for (const e of entries) if (!e.isIntersecting) this._releasePage(e.target);
+    }, { root: sc, rootMargin: `${Math.max(1200, sc.clientHeight * 2)}px 0px` });
+    const current = new IntersectionObserver((entries) => {
+      if (!this.book || !this.pageMode) return;
+      for (const e of entries) if (e.isIntersecting && e.target.isConnected) this._linePage = Number(e.target.dataset.page);
+      this._syncPage();
       this._updateMeta();
-    }, { root: this.scroller, rootMargin: '600px 0px', threshold: [0, 0.3, 0.6] });
-    wraps.forEach(w => this.pageObserver.observe(w));
-    this.currentPage = keepPage;
+    }, { root: sc, rootMargin: '-30% 0px -69% 0px' });
+    const observers = [render, release, current];
+    wraps.forEach(w => observers.forEach(o => o.observe(w)));
+    this.pageObserver = { disconnect: () => observers.forEach(o => o.disconnect()) };
+    this.currentPage = this._linePage = keepPage;
+    if (at) {
+      const w = wraps[at.n - 1];
+      this._progScrollAt = Date.now();
+      sc.scrollTop = w.offsetTop + at.fy * w.offsetHeight - sc.clientHeight * 0.3;
+      sc.scrollLeft = at.fx * sc.scrollWidth - sc.clientWidth / 2;
+    }
+  }
+  // The current page is the one under the line 30% down the screen. Short pages (slides, zoomed out) never reach
+  // that line at the end of the document, so at the very bottom it is the last page.
+  _syncPage() {
+    const sc = this.scroller;
+    if (!this.pdf || this.pagesEl.hidden || !this._linePage) return;
+    const end = sc.scrollTop > 0 && sc.scrollTop >= sc.scrollHeight - sc.clientHeight - 2;
+    this.currentPage = end ? this.pdf.numPages : this._linePage;
+  }
+  // page under the line 30% down the screen, how far down that page the line is, and the horizontal centre
+  _pageAnchor() {
+    const sc = this.scroller;
+    if (this.pagesEl.hidden) return null;
+    const y = sc.scrollTop + sc.clientHeight * 0.3;
+    for (const w of this.pagesEl.children) {
+      if (w.offsetTop + w.offsetHeight >= y) return { n: Number(w.dataset.page), fy: clamp((y - w.offsetTop) / w.offsetHeight, 0, 1), fx: (sc.scrollLeft + sc.clientWidth / 2) / sc.scrollWidth };
+    }
+    return null;
   }
   async _renderPage(n, wrap, scale) {
-    if (wrap.dataset.rendered === String(scale)) return;
-    wrap.dataset.rendered = String(scale);
-    const page = await this.pdf.getPage(n);
+    const key = String(scale), pdf = this.pdf;
+    if (!pdf || wrap.dataset.rendered === key) return;
+    wrap.dataset.rendered = key;
+    const page = await pdf.getPage(n);
+    // released, or laid out again, while the page loaded
+    if (wrap.dataset.rendered !== key || !wrap.isConnected) return;
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const vp = page.getViewport({ scale: scale * dpr });
     const c = wrap.querySelector('canvas');
     c.width = vp.width; c.height = vp.height;
-    await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise;
+    wrap.task = page.render({ canvasContext: c.getContext('2d'), viewport: vp });
+    try { await wrap.task.promise; } catch (e) { if (e?.name !== 'RenderingCancelledException') console.warn('page', n, e); }
+  }
+  // drop the canvas bitmap; the inline size keeps the page's place
+  _releasePage(wrap) {
+    if (!wrap.dataset.rendered) return;
+    delete wrap.dataset.rendered;
+    if (wrap.task) { wrap.task.cancel(); wrap.task = null; }
+    const c = wrap.querySelector('canvas'); c.width = c.height = 0;
   }
   _addZoomCtl() {
     this._removeZoomCtl();
     const z = document.createElement('div'); z.className = 'zoom-ctl'; z.id = 'zoom-ctl';
     z.innerHTML = '<button title="Zoom out">−</button><button title="Zoom in">+</button>';
     const [out, inn] = z.querySelectorAll('button');
-    out.onclick = () => { this.zoom = clamp(this.zoom - 0.2, 0.5, 3); this._layoutPages().then(() => this.gotoPage(this.currentPage)); };
-    inn.onclick = () => { this.zoom = clamp(this.zoom + 0.2, 0.5, 3); this._layoutPages().then(() => this.gotoPage(this.currentPage)); };
+    out.onclick = () => { this.zoom = clamp(this.zoom - 0.2, 0.5, 3); this._layoutPages(); };
+    inn.onclick = () => { this.zoom = clamp(this.zoom + 0.2, 0.5, 3); this._layoutPages(); };
     this.view.appendChild(z);
   }
   _removeZoomCtl() { const z = $('#zoom-ctl'); if (z) z.remove(); }

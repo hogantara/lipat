@@ -22,10 +22,11 @@ function loadScript(url) {
   return scriptCache[url];
 }
 
-let pdfjsLib = null;
+let pdfjsLib = null, pdfjsFailed = false;
 export async function getPdfjs() {
   if (pdfjsLib) return pdfjsLib;
-  pdfjsLib = await import(CDN.pdfjs);
+  // the browser remembers a failed import() for that URL until reload, so a retry asks for a fresh one
+  try { pdfjsLib = await import(pdfjsFailed ? CDN.pdfjs + '?r=' + Date.now() : CDN.pdfjs); } catch (e) { pdfjsFailed = true; throw e; }
   pdfjsLib.GlobalWorkerOptions.workerSrc = CDN.pdfjsWorker;
   return pdfjsLib;
 }
@@ -59,7 +60,47 @@ async function readText(file) {
   // BOM sniff
   if (bytes[0] === 0xFF && bytes[1] === 0xFE) return new TextDecoder('utf-16le').decode(buf);
   if (bytes[0] === 0xFE && bytes[1] === 0xFF) return new TextDecoder('utf-16be').decode(buf);
-  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { return new TextDecoder('windows-1252').decode(buf); }
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch {}
+  // Not UTF-8: a legacy encoding. Decode a sample strictly in each candidate and keep the one that reads most like
+  // real text in its own script; windows-1252 (Western text) wins ties.
+  const sample = bytes.subarray(0, 65536);
+  let best = 'windows-1252', top = decodeScore(new TextDecoder(best).decode(sample));
+  for (const enc of LEGACY) {
+    let s;
+    try { s = decodeScore(new TextDecoder(enc, { fatal: true }).decode(sample, { stream: true })); } catch { continue; }
+    if (s > top) { best = enc; top = s; }
+  }
+  return new TextDecoder(best).decode(buf);
+}
+const LEGACY = ['gb18030', 'big5', 'shift_jis', 'euc-jp', 'euc-kr', 'windows-1251', 'koi8-r'];
+// frequent Han (simplified, traditional, Japanese) and Hangul syllables: the right decode hits them often, a wrong one rarely
+const COMMON = new Set('的一是不了人我在有他这這中大来來上个個国國到说說们們为為子和你地出道也时時年得就那要下以生会會自着去之过過家学學对對可她里裡后後小么麼心多天而能好都然没沒日于起还還发發成事只作当當想看文无無开開手十用主行方又如前所本见見经經头頭面同三已老从從动動两兩长長知样樣现現分将將外但身些与與高意进進把法此实實回二理点點月明种種声聲全己话話儿兒向情正名定女问問力给給等几幾很最间間新什打便位因重被走电電四第门門相次东東海口西再平真听聽世气氣少关關先山水风風夜师師剑劍雨記読語車書今円気'
+  + '이다의는에하고을를가지서한기사리로도자그수아나있인대해어없시면것들일게보우생주만정내전상요부각여무거비라소마중성문조원장위말경모저구제오러두공년동신했었았니습적과와은던까처럼간날안할된음속물람때더잘좀많너래');
+// Average plausibility of the non-ASCII characters of a decoded sample. Wrong decodes give symbols, box drawing,
+// half-width kana, rare ideographs, upper-case Cyrillic, or foreign letters glued to Latin words. A decode with no
+// strong sign of its script (a frequent character, kana, CJK punctuation, a whole word) never beats windows-1252:
+// a lone 0xB0 0x43 ('°C') is a valid but rare GBK ideograph.
+function decodeScore(text) {
+  let score = 0, n = 0, strong = 0;
+  const latin = (c) => /[A-Za-z]/.test(c || '');
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c < '\u0080') continue;
+    n++;
+    const glued = latin(text[i - 1]) || latin(text[i + 1]);
+    if (/[À-ɏ]/.test(c) && c !== '×' && c !== '÷') { score += glued ? 1 : 0.2; strong += glued; } // accented Latin inside a word
+    else if (/[ «»‐-…€]/.test(c)) { score += 0.5; strong++; }        // quotes, dashes, ellipsis, euro
+    else if (/[¡-¿]/.test(c)) continue;                                              // other Latin-1 signs
+    else if (glued) score -= 1;
+    else if (COMMON.has(c) || /[ぁ-ゟ]/.test(c)) { score += 2; strong++; }             // frequent CJK, Hangul, hiragana
+    else if (/[　-〿！-～]/.test(c)) { score += 1; strong++; }                 // CJK punctuation, full-width forms
+    else if (/[゠-ヿ一-鿿가-힣]/.test(c)) { score += 0.5; strong += /[\u30A0-\u30FF]/.test(c) && /[\u30A0-\u30FF]/.test(text[i - 1] + text[i + 1]); } // katakana (a run is a word), Han, Hangul
+    else if (/[Ѐ-џ]/.test(c) && !/[Ѐ-џ]/.test(text[i - 1] + text[i + 1])) score -= 1; // lone Cyrillic: a Western sign read as cp1251
+    else if (/[а-џ]/.test(c)) { score += 1; strong++; }                               // Cyrillic prose is mostly lower case
+    else if (/[Ѐ-Я]/.test(c)) score += 0.3;
+    else score -= 1;
+  }
+  return n ? (strong ? score / n : Math.min(score / n, 0)) : 0;
 }
 
 // ------------------------------------------------------------------ detect
@@ -130,8 +171,8 @@ export async function parseTxt(file) {
   const pushSection = () => { if (html) { sections.push({ id: 's' + sections.length, title: sectionTitle, html }); html = ''; chunk = 0; } };
   for (const p of paras) {
     const isHeading = /^(chapter|part|book|section)\b[\s\w.:'’-]{0,60}$/i.test(p.trim()) || (p.length < 60 && p === p.toUpperCase() && /[A-Z]{3,}/.test(p) && !/[.!?]$/.test(p));
-    if (isHeading) { pushSection(); sectionTitle = p.trim(); html += `<h2>${esc(p.trim())}</h2>`; continue; }
-    html += `<p>${esc(p).replace(/\n/g, '<br>')}</p>`;
+    if (isHeading) { pushSection(); sectionTitle = p.trim(); html += `<h2 dir="auto">${esc(p.trim())}</h2>`; continue; }
+    html += `<p dir="auto">${esc(p).replace(/\n/g, '<br>')}</p>`;
     if (++chunk > 400) pushSection();
   }
   pushSection();
@@ -155,10 +196,20 @@ export async function parseHtml(file) {
   const text = await readText(file);
   const doc = new DOMParser().parseFromString(text, 'text/html');
   const title = (doc.querySelector('title')?.textContent || prettyName(file.name)).trim();
-  const main = doc.querySelector('article, main') || doc.body;
+  // <main> is the content, unless it sits inside the page's one top-level <article> (comments nested in an article
+  // don't count) or holds far less text than it (an empty or skip-link <main>). Without <main>, that article is;
+  // several are posts, keep them all.
+  const posts = [...doc.querySelectorAll('article')].filter(a => !a.parentElement.closest('article'));
+  const shared = posts.length > 1 && posts.every(a => a.parentElement === posts[0].parentElement) && posts[0].parentElement;
+  const m = doc.querySelector('main'), len = (el) => el.textContent.trim().length;
+  const one = posts.length === 1 && posts[0];
+  let main = (one && (!m || one.contains(m) || len(m) < len(one) / 4) && one) || m || shared || doc.body;
   main.querySelectorAll('script, style, nav, header, footer, aside, noscript, iframe').forEach(n => n.remove());
+  // a lone wrapper (<main><article>, <div class=entry-content>) would hide the h1/h2 splits and the TOC
+  while (main.children.length === 1 && /^(ARTICLE|MAIN|SECTION|DIV)$/.test(main.firstElementChild.tagName)
+    && ![...main.childNodes].some(n => n.nodeType === 3 && n.textContent.trim())) main = main.firstElementChild;
   const html = await sanitize(main.innerHTML);
-  return splitHtmlIntoSections(html, title, 'html');
+  return splitHtmlIntoSections(html, title, 'html', main.closest('[dir]')?.getAttribute('dir'), main.closest('[lang]')?.getAttribute('lang'));
 }
 
 // ------------------------------------------------------------------ DOCX
@@ -204,7 +255,9 @@ export async function parseDocx(file) {
 }
 
 // Split a flat HTML string into sections on h1/h2, build TOC from h1–h3.
-function splitHtmlIntoSections(html, title, format) {
+// Blocks get the source's direction, or dir="auto" (each follows its first letter) so Arabic and Hebrew read right to left.
+function splitHtmlIntoSections(html, title, format, dir, lang) {
+  dir = /^(ltr|rtl)$/i.test(dir || '') ? dir.toLowerCase() : 'auto';
   const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
   const nodes = Array.from(doc.body.childNodes);
   const sections = [];
@@ -223,7 +276,8 @@ function splitHtmlIntoSections(html, title, format) {
       if (!cur.title) cur.title = n.textContent.trim();
       toc.push({ title: n.textContent.trim(), sectionId: cur.id, anchor: id, depth: Number(n.tagName[1]) - 1 });
     }
-    cur.parts.push(n.nodeType === 1 ? n.outerHTML : (n.textContent.trim() ? `<p>${esc(n.textContent)}</p>` : ''));
+    if (n.nodeType === 1) { if (!n.hasAttribute('dir')) n.setAttribute('dir', dir); if (lang && !n.hasAttribute('lang')) n.setAttribute('lang', lang); }
+    cur.parts.push(n.nodeType === 1 ? n.outerHTML : (n.textContent.trim() ? `<p dir="${dir}"${lang ? ` lang="${esc(lang)}"` : ''}>${esc(n.textContent)}</p>` : ''));
   }
   flush();
   if (!sections.length) sections.push({ id: 's0', title: null, html: html || '<p></p>' });
@@ -275,7 +329,7 @@ export async function parseEpub(file, onProgress) {
   if (!coverId) { const m = opf.querySelector('meta[name="cover"]'); if (m) coverId = m.getAttribute('content'); }
   if (coverId && manifest[coverId]) {
     const f = entry(resolve(manifest[coverId].href));
-    if (f) cover = new Blob([await f.async('arraybuffer')], { type: manifest[coverId].type || 'image/jpeg' });
+    if (f) cover = await safeCover(await f.async('uint8array'));
   }
 
   // resource cache: path -> data URL
@@ -323,6 +377,18 @@ export async function parseEpub(file, onProgress) {
       a.removeAttribute('href');
     });
     body.querySelectorAll('script, style, link, nav[hidden]').forEach(n => n.remove());
+    // Direction and language live on <html> and <body>, which are dropped: move them onto the blocks. A chapter that
+    // declares none follows its own text (right-to-left set in CSS only). The spine's page-progression-direction is
+    // page order, not text direction: vertical Japanese and Chinese books set it to rtl.
+    const root = body.ownerDocument.documentElement;
+    const attr = (name) => body.getAttribute(name) || body.getAttribute('xml:' + name) || root.getAttribute(name) || root.getAttribute('xml:' + name);
+    let textDir = (attr('dir') || '').toLowerCase();
+    if (textDir !== 'ltr' && textDir !== 'rtl') { const t = body.textContent; textDir = (t.match(RTL_CHARS_G) || []).length > (t.match(/\p{L}/gu) || []).length / 2 ? 'rtl' : ''; }
+    const lang = attr('lang');
+    for (const el of Array.from(body.children)) {
+      if (textDir === 'rtl' && !el.hasAttribute('dir')) el.setAttribute('dir', 'rtl');
+      if (lang && !el.hasAttribute('lang') && !el.hasAttribute('xml:lang')) el.setAttribute('lang', lang);
+    }
     const clean = DOMPurify.sanitize(body.innerHTML, {
       USE_PROFILES: { html: true, svg: true },
       FORBID_TAGS: ['script', 'style', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'link', 'meta', 'title', 'head'],
@@ -387,6 +453,32 @@ export async function parseEpub(file, onProgress) {
   toc = toc.filter(t => t.sectionId);
   if (!toc.length) toc = sections.filter(s => s.title).map(s => ({ title: s.title, sectionId: s.id, anchor: null, depth: 0 }));
   return { title, author, format: 'epub', cover, sections, toc, pageCount: null };
+}
+
+// The cover becomes a blob: URL in the app's own origin, and a blob opened as a page (open image in new tab) runs
+// any script it holds. So a cover is only ever a raster image, typed by its bytes and never by the manifest. An SVG
+// cover is drawn onto a canvas through an <img>, where its scripts never run.
+export async function safeCover(bytes) {
+  const at = (i, s) => [...s].every((ch, k) => bytes[i + k] === ch.charCodeAt(0));
+  const type = at(0, '\xFF\xD8\xFF') ? 'image/jpeg' : at(0, '\x89PNG') ? 'image/png' : at(0, 'GIF8') ? 'image/gif'
+    : at(0, 'BM') ? 'image/bmp' : at(0, 'RIFF') && at(8, 'WEBP') ? 'image/webp' : at(4, 'ftyp') && /avi[fs]/.test(String.fromCharCode(...bytes.subarray(8, 32))) ? 'image/avif' : '';
+  if (type) return new Blob([bytes], { type });
+  const svg = new DOMParser().parseFromString(new TextDecoder().decode(bytes), 'image/svg+xml').documentElement;
+  if (svg.localName !== 'svg') return null;
+  const vb = (svg.getAttribute('viewBox') || '').trim().split(/[\s,]+/).map(Number);
+  const num = (a) => /^\s*[\d.]+(px)?\s*$/.test(svg.getAttribute(a) || '') ? parseFloat(svg.getAttribute(a)) : 0;
+  const ratio = vb[2] > 0 && vb[3] > 0 ? vb[3] / vb[2] : num('width') && num('height') ? num('height') / num('width') : 1.5;
+  const url = URL.createObjectURL(new Blob([bytes], { type: 'image/svg+xml' }));
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const c = document.createElement('canvas'); c.width = 600; c.height = Math.round(600 * Math.min(Math.max(ratio, 0.5), 3));
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    return await new Promise(res => c.toBlob(res, 'image/jpeg', 0.85));
+  } catch { return null; } finally { URL.revokeObjectURL(url); }
 }
 
 // ------------------------------------------------------------------ PDF
@@ -470,26 +562,127 @@ function itemsToLines(items, styles) {
     if (last && Math.abs(last.y - g.y) <= Math.max(2, last.size * 0.45)) { last.items.push(g); }
     else lines.push({ y: g.y, size: g.size, items: [g] });
   }
-  return lines.map(l => {
+  return columnOrder(lines).map(l => {
     l.items.sort((p, q) => p.x - q.x);
-    let text = '';
+    // pieces in visual order (left to right), with the spaces between them
+    const toks = [];
     let prev = null;
     for (const g of l.items) {
       if (prev) {
         const gap = g.x - (prev.x + prev.w);
-        if (gap > prev.size * 0.12 && !text.endsWith(' ') && !g.str.startsWith(' ')) text += ' ';
+        if (gap > prev.size * 0.12 && !prev.str.endsWith(' ') && !g.str.startsWith(' ')) toks.push({ str: ' ', d: '' });
       }
-      text += g.str;
+      toks.push({ str: g.str, d: RTL_CHARS.test(g.str) ? 'r' : /[\p{L}\p{N}]/u.test(g.str) ? 'l' : '' });
       prev = g;
+    }
+    // Right-to-left lines (Arabic, Hebrew) come as pieces in visual order: read them right to left, and keep runs
+    // of the other direction (numbers, Latin words) in their own order. A neutral piece between two pieces of
+    // the same direction takes that direction.
+    const all = l.items.map(g => g.str).join('');
+    const rtl = (all.match(RTL_CHARS_G) || []).length > (all.match(/\p{L}/gu) || []).length / 2;
+    const base = rtl ? 'r' : 'l';
+    const before = [];
+    toks.forEach((t, i) => { before[i] = t.d || before[i - 1] || ''; });
+    for (let i = toks.length - 1, after = ''; i >= 0; i--) {
+      if (toks[i].d) { after = toks[i].d; continue; }
+      toks[i].d = before[i] && before[i] === after ? after : base;
+    }
+    if (rtl) toks.reverse();
+    let text = '';
+    for (let i = 0; i < toks.length;) {
+      let j = i;
+      while (j < toks.length && (toks[j].d === base) === (toks[i].d === base)) j++;
+      const run = toks.slice(i, j);
+      if (toks[i].d !== base) run.reverse();
+      text += run.map(t => t.str).join('');
+      i = j;
     }
     const sizes = l.items.map(g => g.size);
     const size = sizes.reduce((s, v) => s + v, 0) / sizes.length;
     const x0 = l.items[0].x, x1 = prev.x + prev.w;
     const bold = l.items.filter(g => g.bold).length > l.items.length / 2;
     const italic = l.items.filter(g => g.italic).length > l.items.length / 2;
-    text = text.replace(/^[\u0000-\u0008\u000b-\u001f\uE000-\uF8FF]\s*/, '• ').replace(/[\u0000-\u0008\u000b-\u001f\uE000-\uF8FF]/g, '');
-    return { text: text.replace(/\s+/g, ' ').trim(), x0, x1, y: l.y, size, bold, italic, leader: /(\.\s?){4,}\s*\d+\s*$/.test(text) };
+    // Arabic presentation forms (shaped glyphs) back to plain letters
+    text = text.replace(/[ﬀ-﷿ﹰ-﻿]+/g, s => s.normalize('NFKC'));
+    // RTL fonts often leave letters unmapped (control codes), so only a private-use glyph makes an RTL bullet
+    text = text.replace(rtl ? /^[\uE000-\uF8FF]\s*/ : /^[\u0000-\u0008\u000b-\u001f\uE000-\uF8FF]\s*/, '• ').replace(/[\u0000-\u0008\u000b-\u001f\uE000-\uF8FF]/g, '');
+    return { text: text.replace(/\s+/g, ' ').trim(), x0, x1, y: l.y, size, bold, italic, rtl, col: l.col || 0, colTop: !!l.colTop, leader: /(\.\s?){4,}\s*\d+\s*$/.test(text) };
   }).filter(l => l.text);
+}
+const RTL_CHARS = /[֐-ࣿיִ-﷿ﹰ-ﻼ]/;
+const RTL_CHARS_G = new RegExp(RTL_CHARS.source, 'g');
+
+// Two-column pages: find a gutter, an x that no line crosses over a run of lines with column text on both
+// sides, and read each such run as the first column, then the second. Lines across the gutter (titles,
+// abstracts, centred page numbers) stay where they are.
+function columnOrder(lines) {
+  if (lines.length < 6) return lines;
+  let L = Infinity, R = -Infinity;
+  for (const l of lines) for (const g of l.items) { L = Math.min(L, g.x); R = Math.max(R, g.x + g.w); }
+  const span = R - L;
+  // inked stretches of each line, word gaps closed
+  const ink = lines.map(l => {
+    const out = [];
+    for (const g of [...l.items].sort((p, q) => p.x - q.x)) {
+      const last = out[out.length - 1];
+      if (last && g.x - last[1] < l.size * 0.7) last[1] = Math.max(last[1], g.x + g.w);
+      else out.push([g.x, g.x + g.w]);
+    }
+    return out;
+  });
+  const median = (a) => a.sort((p, q) => p - q)[Math.floor(a.length / 2)];
+  let best = null;
+  for (let x = L + span * 0.3; x <= L + span * 0.7; x += 2) {
+    const runs = [];
+    let run = [];
+    const close = () => {
+      const left = [], right = [];
+      for (const i of run) {
+        if (ink[i].some(([, b]) => b <= x)) left.push(i);
+        if (ink[i].some(([a]) => a >= x)) right.push(i);
+      }
+      const wide = (side, l) => side.length >= 3 && median(side.map(i => { const w = ink[i].filter(([a, b]) => l ? b <= x : a >= x); return w[w.length - 1][1] - w[0][0]; })) >= span * 0.25;
+      if (wide(left, true) && wide(right, false)) runs.push(run);
+      run = [];
+    };
+    lines.forEach((l, i) => { if (ink[i].some(([a, b]) => a < x && b > x)) close(); else run.push(i); });
+    close();
+    const score = runs.reduce((s, r) => s + r.length, 0);
+    if (score && (!best || score > best.score)) best = { x, runs, score };
+  }
+  // Not columns: table rows, whose cells leave a second channel of white space down one side (word gaps, even in
+  // loose justified lines, are scattered), and code with trailing comments, whose right side is comments.
+  if (best) {
+    const x = best.x;
+    const channel = (run, l) => {
+      const ws = run.map(i => ink[i].filter(([a, b]) => l ? b <= x : a >= x)).filter(w => w.length);
+      const gutter = median(run.map(i => ink[i]).filter(w => w.some(([, b]) => b <= x) && w.some(([a]) => a >= x)).map(w => w.find(([a]) => a >= x)[0] - w.filter(([, b]) => b <= x).pop()[1])) || 0;
+      // a narrow first stretch is a line number or a bullet, not a cell
+      const gaps = ws.map(w => w.slice(1).map((s, k) => [w[k][1], s[0], k]).filter(([a, b, k]) => b - a >= gutter * 0.5 && (k || w[0][1] - w[0][0] >= span * 0.04)));
+      const lo = Math.min(...ws.map(w => w[0][0])), hi = Math.max(...ws.map(w => w[w.length - 1][1]));
+      for (let c = lo; c <= hi; c += 2) if (gaps.filter(gs => gs.some(([a, b]) => a <= c && b >= c)).length >= ws.length * 0.6) return true;
+      return false;
+    };
+    const comments = (run) => run.filter(i => /^\s*(#|\/\/|\/\*|--|;)/.test(lines[i].items.filter(g => g.x >= x).sort((p, q) => p.x - q.x).map(g => g.str).join(''))).length >= run.length / 2;
+    best.runs = best.runs.filter(r => !channel(r, true) && !channel(r, false) && !comments(r));
+    if (!best.runs.length) best = null;
+  }
+  if (!best) return lines;
+  const out = [];
+  let next = 0;
+  for (const run of best.runs) {
+    while (next < run[0]) out.push(lines[next++]);
+    const side = (col, left) => run.map(i => lines[i]).map(l => ({ y: l.y, size: l.size, col, items: l.items.filter(g => (g.x + g.w / 2 < best.x) === left) })).filter(l => l.items.length);
+    const lefts = side(1, true), rights = side(2, false);
+    // right-to-left text reads the right column first
+    const rtlLines = run.filter(i => lines[i].items.some(g => RTL_CHARS.test(g.str))).length;
+    const [first, second] = rtlLines > run.length / 2 ? [rights, lefts] : [lefts, rights];
+    second[0].colTop = true;
+    out.push(...first, ...second);
+    next = run[run.length - 1] + 1;
+  }
+  while (next < lines.length) out.push(lines[next++]);
+  return out;
 }
 
 function reflowPages(pages, outline) {
@@ -529,7 +722,7 @@ function reflowPages(pages, outline) {
   for (const pg of pages) { let prevL = null; for (const l of pg.lines) { if (isNoise(l, pg)) continue; if (prevL) { const g = prevL.y - l.y; if (g > 0 && g < l.size * 4) gaps.push(g / l.size); } prevL = l; } }
   gaps.sort((a, b) => a - b);
   const lineGap = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 1.2; // in units of font size
-  const flush = () => { if (cur && cur.text.trim()) blocks.push(cur); cur = null; };
+  const flush = () => { if (cur && cur.text.trim()) blocks.push(cur); if (cur?.notes) blocks.push(...cur.notes); cur = null; };
   const headingLevel = (l) => {
     if (l.size >= bodySize * 1.6) return 1;
     if (l.size >= bodySize * 1.25) return 2;
@@ -541,8 +734,44 @@ function reflowPages(pages, outline) {
     return 0;
   };
 
+  // Indents are measured from the body text edge of each page, column and direction: where unindented lines
+  // start. l.s is the start of a line in reading direction (x0, or -x1 for right-to-left lines).
   for (const pg of pages) {
-    let prev = null;
+    const groups = new Map();
+    for (const l of pg.lines) {
+      if (isNoise(l, pg)) continue;
+      l.s = l.rtl ? -l.x1 : l.x0;
+      const k = l.col + (l.rtl ? 'r' : '');
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(l);
+    }
+    for (const ls of groups.values()) {
+      const wide = Math.max(...ls.map(l => l.x1 - l.x0)) * 0.5;
+      const edge = Math.min(...ls.filter(l => l.x1 - l.x0 >= wide).map(l => l.s));
+      for (const l of ls) l.ind = l.s - edge;
+    }
+  }
+  const isFn = (b) => b.size < bodySize * 0.86;
+  // Does line l start a new paragraph after line prev of paragraph cur? brk: l is the first line of a page or column.
+  const startsPara = (l, prev, cur, brk) => {
+    const gap = prev.y - l.y;                         // same page: positive gap
+    const indent = l.ind - cur.ind;                   // against the paragraph's own edge (its least indented line)
+    const prevShort = (prev.x1 - prev.x0) < typicalWidth * 0.75 && /[.!?:"”’)]$/.test(prev.text);
+    const listStart = /^([•\-–—*·▪◦]|\d+[.)]|[a-z][.)]|\(?[ivx]+\))\s/i.test(l.text) || prev.leader || l.leader;
+    const sizeChange = Math.abs(l.size - cur.size) > bodySize * 0.15;
+    if (brk) return prevShort || indent > l.size * 0.8 || listStart || sizeChange || /^[A-Z]/.test(l.text) && /[.!?]$/.test(prev.text) && (prev.x1 - prev.x0) < typicalWidth * 0.9;
+    if (gap > l.size * Math.max(1.9, lineGap * 1.45) || gap < -l.size * 0.5) return true; // big gap or column jump
+    if (indent > l.size * 0.8 && prevShort) return true;
+    if (indent > l.size * 1.5) return true;
+    if (indent > l.size && /[.!?:"”’)]$/.test(prev.text)) return true; // indented line after a sentence end
+    if (prevShort && gap > l.size * Math.max(1.3, lineGap * 1.12)) return true;
+    if (listStart || sizeChange) return true;
+    // a one-line paragraph has no edge of its own: an indented short line, then a line indented the same way
+    return cur.n === 1 && prevShort && cur.ind > l.size * 0.8 && Math.abs(indent) < l.size * 0.3;
+  };
+
+  let prev = null; // kept across pages, so the first line of a page is judged against the last one
+  for (const pg of pages) {
     let firstOnPage = true;
     for (const l of pg.lines) {
       if (isNoise(l, pg)) continue;
@@ -550,37 +779,38 @@ function reflowPages(pages, outline) {
       const hl = headingLevel(l);
       const marker = firstOnPage ? pg.num : null;
       firstOnPage = false;
+      const brk = !!marker || l.colTop;
       if (hl) {
         // merge consecutive heading lines of the same level (wrapped headings)
-        if (cur && cur.type === 'h' && cur.level === hl && prev && !marker && Math.abs(prev.size - l.size) < 0.5 && (Math.abs(prev.y - l.y) < l.size * 1.8 || /[,\-–]$/.test(cur.text) || /^[a-z]/.test(l.text))) { cur.text += (/-$/.test(cur.text) ? '' : ' ') + l.text; prev = l; continue; }
+        if (cur && cur.type === 'h' && cur.level === hl && prev && !brk && Math.abs(prev.size - l.size) < 0.5 && (Math.abs(prev.y - l.y) < l.size * 1.8 || /[,\-–]$/.test(cur.text) || /^[a-z]/.test(l.text))) { cur.text += (/-$/.test(cur.text) ? '' : ' ') + l.text; prev = l; continue; }
         flush();
         cur = { type: 'h', level: hl, text: l.text, page: pg.num, marker };
         prev = l; continue;
       }
-      const width = l.x1 - l.x0;
-      let newPara = false;
-      if (!cur || cur.type === 'h') newPara = true;
-      else if (prev) {
-        const gap = prev.y - l.y;                         // same page: positive gap
-        const indent = l.x0 - cur.x0;
-        const prevShort = (prev.x1 - prev.x0) < typicalWidth * 0.75 && /[.!?:"”’)]$/.test(prev.text);
-        const listStart = /^([•\-–—*·▪◦]|\d+[.)]|[a-z][.)]|\(?[ivx]+\))\s/i.test(l.text) || prev.leader || l.leader;
-        const sizeChange = Math.abs(l.size - cur.size) > bodySize * 0.15;
-        if (marker) { newPara = prevShort || indent > l.size * 0.8 || listStart || sizeChange || /^[A-Z]/.test(l.text) && /[.!?]$/.test(prev.text) && (prev.x1 - prev.x0) < typicalWidth * 0.9; }
-        else if (gap > l.size * Math.max(1.9, lineGap * 1.45) || gap < -l.size * 0.5) newPara = true; // big gap or column jump
-        else if (indent > l.size * 0.8 && prevShort) newPara = true;
-        else if (indent > l.size * 1.5) newPara = true;
-        else if (prevShort && gap > l.size * Math.max(1.3, lineGap * 1.12)) newPara = true;
-        else if (listStart) newPara = true;
-        else if (sizeChange) newPara = true;
-      }
-      if (newPara) {
+      // Small print ended the last page (footnotes) or starts this one (a running head): body text that carries
+      // on continues the paragraph it interrupted, and the small print moves after that paragraph.
+      let cont = false, marks = marker ? [marker] : [];
+      if (cur && cur.type === 'p' && isFn(cur) && !isFn(l) && (brk || cur.marker === pg.num)) {
         flush();
-        cur = { type: 'p', text: l.text, page: pg.num, size: l.size, x0: l.x0, marker, italic: l.italic };
+        let i = blocks.length - 1;
+        while (i >= 0 && blocks[i].type === 'p' && isFn(blocks[i])) i--;
+        const b = blocks[i];
+        if (b && b.type === 'p' && !startsPara(l, b.last, b, true)) {
+          const notes = blocks.splice(i + 1);
+          // the small print's own page markers go in front of this page's
+          marks = [...notes.filter(n => n.marker).map(n => { const m = n.marker; n.marker = null; return m; }), ...marks];
+          cur = blocks.pop(); cur.notes = notes; prev = cur.last; cont = true;
+        }
+      }
+      if (!cont && (!cur || cur.type === 'h' || !prev || startsPara(l, prev, cur, brk))) {
+        flush();
+        cur = { type: 'p', text: l.text, page: pg.num, size: l.size, ind: l.ind, n: 1, last: l, marker, italic: l.italic };
       } else {
-        if (marker) (cur.markersInside = cur.markersInside || []).push(marker);
         const hyph = /[a-z]-$/.test(cur.text) && /^[a-z]/.test(l.text);
+        // a page that starts inside the paragraph gets its marker where its text starts (a split word: before it)
+        for (const m of marks) (cur.pgs = cur.pgs || []).push([hyph ? cur.text.lastIndexOf(' ') + 1 : cur.text.length + 1, m]);
         cur.text = hyph ? cur.text.slice(0, -1) + l.text : cur.text + ' ' + l.text;
+        cur.ind = Math.min(cur.ind, l.ind); cur.n++; cur.last = l;
       }
       prev = l;
     }
@@ -604,8 +834,9 @@ function reflowPages(pages, outline) {
       if (!outline.length) toc.push({ title: b.text, sectionId: 's' + sections.length, anchor: id, depth: b.level - 1 });
     } else {
       const cls = [b.italic ? 'it' : '', b.size && b.size < bodySize * 0.86 ? 'fn' : ''].filter(Boolean).join(' ');
-      html += `<p${cls ? ` class="${cls}"` : ''}>${esc(b.text)}</p>`;
-      for (const n of (b.markersInside || [])) if (n !== lastPage) { html += pageMark(n, false); lastPage = n; }
+      let text = '', at = 0;
+      for (const [i, n] of (b.pgs || [])) { text += esc(b.text.slice(at, i)); at = i; if (n !== lastPage) { text += pageMark(n, false); lastPage = n; } }
+      html += `<p${cls ? ` class="${cls}"` : ''}>${text + esc(b.text.slice(at))}</p>`;
     }
   }
   pushSection();
