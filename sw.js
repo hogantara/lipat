@@ -1,5 +1,5 @@
 // Lipat service worker: offline app shell, cached libraries, "Share to Lipat" inbox.
-const VERSION = 'lipat-v8';
+const VERSION = 'lipat-v9';
 const SHELL = ['./', './index.html', './css/app.css', './js/app.js', './js/reader.js', './js/formats.js', './js/db.js', './js/config.js', './js/drive.js', './js/export.js', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 const INBOX = 'lipat-inbox';
 
