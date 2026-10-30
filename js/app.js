@@ -5,7 +5,7 @@ import { Reader, EMOJIS, DEFAULT_PREFS, applyPrefs, isMobile } from './reader.js
 import { Drive, DriveError } from './drive.js';
 import { bookMarkdown, reactionMarkdown, indexMarkdown, allMarksMarkdown, safeName, REACTIONS } from './export.js';
 import { GOOGLE_CLIENT_ID, GOOGLE_API_KEY } from './config.js';
-export const BUILD = '2026-10-30.10';
+export const BUILD = '2026-10-30.14';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -23,6 +23,7 @@ function toast(msg, action) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(hideToast, action ? 5000 : 2600);
 }
+toast.hide = () => { if (!$('#toast').hidden) hideToast(); };
 function hideToast() { const t = $('#toast'); t.classList.remove('show'); toastHideTimer = setTimeout(() => { t.hidden = true; }, 250); }
 
 // ------------------------------------------------------------ state
@@ -277,6 +278,7 @@ function renderMarksTab() {
   sel.value = cur;
   const list = filteredMarks();
   $('#marks-empty').hidden = state.marks.length > 0;
+  $('#marks-toolbar').hidden = !state.marks.length;
   const wrap = $('#marks-list');
   if (!list.length) { wrap.innerHTML = state.marks.length ? '<div class="no-match">No marks match.</div>' : ''; return; }
   const groups = new Map();
