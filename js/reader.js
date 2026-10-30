@@ -319,8 +319,7 @@ export class Reader {
       else if (dy < 0) document.body.classList.remove('chrome-hidden');
     }
     this.lastScroll = st;
-    // short pages (slides, zoomed out) never reach the current-page line at the end of the document
-    if (this.pageMode && this.pdf && !this.pagesEl.hidden && max > 0 && st >= max - 2) this.currentPage = this.pdf.numPages;
+    if (this.pageMode) this._syncPage();
     if (!this.pending) this.bubble.hidden = true;
     this._updateMeta();
     this._savePosition();
@@ -380,13 +379,15 @@ export class Reader {
     const map = { 'font-family': 'font', 'line-height': 'lh', 'measure': 'measure', 'theme-seg': 'theme', 'justify': 'align' };
     for (const [id, key] of Object.entries(map)) $$('#' + id + ' button').forEach(b => b.classList.toggle('is-active', b.dataset.v === String(this.prefs[key])));
   }
-  togglePop() { this.typePop.hidden = !this.typePop.hidden; if (!this.typePop.hidden) { this.panel.hidden = true; this.closeEditor(); this.hideBubble(); } this._syncScrim(); }
+  togglePop() { this.typePop.hidden = !this.typePop.hidden; if (!this.typePop.hidden) { this.panel.hidden = true; this.closeEditor(); if (this.pending) this.hideBubble(); } this._syncScrim(); }
   _syncScrim() { this.scrim.hidden = !isMobile() || (this.panel.hidden && this.typePop.hidden && this.editor.hidden); }
 
   // ------------------------------------------------------------ panel
   togglePanel(tab, focusSearch = false) {
     if (tab === null || (!this.panel.hidden && this.activeTab === tab)) { this.panel.hidden = true; this._syncScrim(); return; }
-    this.panel.hidden = false; this.typePop.hidden = true; this.closeEditor(); this.hideBubble();
+    this.panel.hidden = false; this.typePop.hidden = true; this.closeEditor();
+    // a pending long-press selection would float its bubble over the sheet (a desktop selection stays usable)
+    if (this.pending) this.hideBubble();
     this.showPanelTab(tab);
     this._syncScrim();
     if (focusSearch) { const si = $('#search-input'); si.focus(); si.select(); }
@@ -910,20 +911,28 @@ export class Reader {
     }, { root: sc, rootMargin: `${Math.max(1200, sc.clientHeight * 2)}px 0px` });
     const current = new IntersectionObserver((entries) => {
       if (!this.book || !this.pageMode) return;
-      for (const e of entries) if (e.isIntersecting && e.target.isConnected) this.currentPage = Number(e.target.dataset.page);
-      if (sc.scrollTop >= sc.scrollHeight - sc.clientHeight - 2 && sc.scrollTop > 0) this.currentPage = this.pdf.numPages;
+      for (const e of entries) if (e.isIntersecting && e.target.isConnected) this._linePage = Number(e.target.dataset.page);
+      this._syncPage();
       this._updateMeta();
     }, { root: sc, rootMargin: '-30% 0px -69% 0px' });
     const observers = [render, release, current];
     wraps.forEach(w => observers.forEach(o => o.observe(w)));
     this.pageObserver = { disconnect: () => observers.forEach(o => o.disconnect()) };
-    this.currentPage = keepPage;
+    this.currentPage = this._linePage = keepPage;
     if (at) {
       const w = wraps[at.n - 1];
       this._progScrollAt = Date.now();
       sc.scrollTop = w.offsetTop + at.fy * w.offsetHeight - sc.clientHeight * 0.3;
       sc.scrollLeft = at.fx * sc.scrollWidth - sc.clientWidth / 2;
     }
+  }
+  // The current page is the one under the line 30% down the screen. Short pages (slides, zoomed out) never reach
+  // that line at the end of the document, so at the very bottom it is the last page.
+  _syncPage() {
+    const sc = this.scroller;
+    if (!this.pdf || this.pagesEl.hidden || !this._linePage) return;
+    const end = sc.scrollTop > 0 && sc.scrollTop >= sc.scrollHeight - sc.clientHeight - 2;
+    this.currentPage = end ? this.pdf.numPages : this._linePage;
   }
   // page under the line 30% down the screen, how far down that page the line is, and the horizontal centre
   _pageAnchor() {

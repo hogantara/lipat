@@ -77,28 +77,30 @@ const LEGACY = ['gb18030', 'big5', 'shift_jis', 'euc-jp', 'euc-kr', 'windows-125
 const COMMON = new Set('的一是不了人我在有他这這中大来來上个個国國到说說们們为為子和你地出道也时時年得就那要下以生会會自着去之过過家学學对對可她里裡后後小么麼心多天而能好都然没沒日于起还還发發成事只作当當想看文无無开開手十用主行方又如前所本见見经經头頭面同三已老从從动動两兩长長知样樣现現分将將外但身些与與高意进進把法此实實回二理点點月明种種声聲全己话話儿兒向情正名定女问問力给給等几幾很最间間新什打便位因重被走电電四第门門相次东東海口西再平真听聽世气氣少关關先山水风風夜师師剑劍雨記読語車書今円気'
   + '이다의는에하고을를가지서한기사리로도자그수아나있인대해어없시면것들일게보우생주만정내전상요부각여무거비라소마중성문조원장위말경모저구제오러두공년동신했었았니습적과와은던까처럼간날안할된음속물람때더잘좀많너래');
 // Average plausibility of the non-ASCII characters of a decoded sample. Wrong decodes give symbols, box drawing,
-// half-width kana, rare ideographs, upper-case Cyrillic, or foreign letters glued to Latin words.
+// half-width kana, rare ideographs, upper-case Cyrillic, or foreign letters glued to Latin words. A decode with no
+// strong sign of its script (a frequent character, kana, CJK punctuation, a whole word) never beats windows-1252:
+// a lone 0xB0 0x43 ('°C') is a valid but rare GBK ideograph.
 function decodeScore(text) {
-  let score = 0, n = 0;
+  let score = 0, n = 0, strong = 0;
   const latin = (c) => /[A-Za-z]/.test(c || '');
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
     if (c < '\u0080') continue;
     n++;
     const glued = latin(text[i - 1]) || latin(text[i + 1]);
-    if (/[À-ɏ]/.test(c) && c !== '×' && c !== '÷') score += glued ? 1 : 0.2; // accented Latin inside a word
-    else if (/[ «»‐-…€]/.test(c)) score += 0.5;                      // quotes, dashes, ellipsis, euro
+    if (/[À-ɏ]/.test(c) && c !== '×' && c !== '÷') { score += glued ? 1 : 0.2; strong += glued; } // accented Latin inside a word
+    else if (/[ «»‐-…€]/.test(c)) { score += 0.5; strong++; }        // quotes, dashes, ellipsis, euro
     else if (/[¡-¿]/.test(c)) continue;                                              // other Latin-1 signs
     else if (glued) score -= 1;
-    else if (COMMON.has(c) || /[ぁ-ゟ]/.test(c)) score += 2;                           // frequent CJK, Hangul, hiragana
-    else if (/[　-〿！-～]/.test(c)) score += 1;                               // CJK punctuation, full-width forms
-    else if (/[゠-ヿ一-鿿가-힣]/.test(c)) score += /[0-9]/.test(text[i - 1] || '') ? -1 : 0.5; // katakana, Han, Hangul (after a digit: 180°C read as GBK)
+    else if (COMMON.has(c) || /[ぁ-ゟ]/.test(c)) { score += 2; strong++; }             // frequent CJK, Hangul, hiragana
+    else if (/[　-〿！-～]/.test(c)) { score += 1; strong++; }                 // CJK punctuation, full-width forms
+    else if (/[゠-ヿ一-鿿가-힣]/.test(c)) { score += 0.5; strong += /[\u30A0-\u30FF]/.test(c) && /[\u30A0-\u30FF]/.test(text[i - 1] + text[i + 1]); } // katakana (a run is a word), Han, Hangul
     else if (/[Ѐ-џ]/.test(c) && !/[Ѐ-џ]/.test(text[i - 1] + text[i + 1])) score -= 1; // lone Cyrillic: a Western sign read as cp1251
-    else if (/[а-џ]/.test(c)) score += 1;                                             // Cyrillic prose is mostly lower case
+    else if (/[а-џ]/.test(c)) { score += 1; strong++; }                               // Cyrillic prose is mostly lower case
     else if (/[Ѐ-Я]/.test(c)) score += 0.3;
     else score -= 1;
   }
-  return n ? score / n : 0;
+  return n ? (strong ? score / n : Math.min(score / n, 0)) : 0;
 }
 
 // ------------------------------------------------------------------ detect
@@ -194,11 +196,14 @@ export async function parseHtml(file) {
   const text = await readText(file);
   const doc = new DOMParser().parseFromString(text, 'text/html');
   const title = (doc.querySelector('title')?.textContent || prettyName(file.name)).trim();
-  // <main> is the content. Without it, one top-level <article> is (comments nested in it don't count); several are
-  // posts, keep them all
+  // <main> is the content, unless it sits inside the page's one top-level <article> (comments nested in an article
+  // don't count) or holds far less text than it (an empty or skip-link <main>). Without <main>, that article is;
+  // several are posts, keep them all.
   const posts = [...doc.querySelectorAll('article')].filter(a => !a.parentElement.closest('article'));
   const shared = posts.length > 1 && posts.every(a => a.parentElement === posts[0].parentElement) && posts[0].parentElement;
-  let main = doc.querySelector('main') || (posts.length === 1 && posts[0]) || shared || doc.body;
+  const m = doc.querySelector('main'), len = (el) => el.textContent.trim().length;
+  const one = posts.length === 1 && posts[0];
+  let main = (one && (!m || one.contains(m) || len(m) < len(one) / 4) && one) || m || shared || doc.body;
   main.querySelectorAll('script, style, nav, header, footer, aside, noscript, iframe').forEach(n => n.remove());
   // a lone wrapper (<main><article>, <div class=entry-content>) would hide the h1/h2 splits and the TOC
   while (main.children.length === 1 && /^(ARTICLE|MAIN|SECTION|DIV)$/.test(main.firstElementChild.tagName)
@@ -633,27 +638,34 @@ function columnOrder(lines) {
     const close = () => {
       const left = [], right = [];
       for (const i of run) {
-        const lw = ink[i].filter(([, b]) => b <= x), rw = ink[i].filter(([a]) => a >= x);
-        if (lw.length) left.push(lw);
-        if (rw.length) right.push(rw);
+        if (ink[i].some(([, b]) => b <= x)) left.push(i);
+        if (ink[i].some(([a]) => a >= x)) right.push(i);
       }
-      // A column of prose: one stretch of ink per line, lines starting at one edge and most running to the other.
-      // Table cells (several stretches, ragged ends) are not columns.
-      const prose = (side) => {
-        if (side.length < 3 || median(side.map(w => w[w.length - 1][1] - w[0][0])) < span * 0.25) return false;
-        const starts = side.map(w => w[0][0]), ends = side.map(w => w[w.length - 1][1]);
-        const s0 = Math.min(...starts), e1 = Math.max(...ends), share = (f) => side.filter(f).length / side.length;
-        return share(w => w.length === 1) >= 0.7 && share(w => w[0][0] <= s0 + span * 0.06) >= 0.7 && share(w => w[w.length - 1][1] >= e1 - span * 0.12) >= 0.6;
-      };
-      // and the left column runs up to a narrow gutter (code comments and table cells leave a wide gap)
-      const gap = () => Math.min(...right.map(w => w[0][0])) - median(left.map(w => w[w.length - 1][1]));
-      if (prose(left) && prose(right) && gap() <= span * 0.12) runs.push(run);
+      const wide = (side, l) => side.length >= 3 && median(side.map(i => { const w = ink[i].filter(([a, b]) => l ? b <= x : a >= x); return w[w.length - 1][1] - w[0][0]; })) >= span * 0.25;
+      if (wide(left, true) && wide(right, false)) runs.push(run);
       run = [];
     };
     lines.forEach((l, i) => { if (ink[i].some(([a, b]) => a < x && b > x)) close(); else run.push(i); });
     close();
     const score = runs.reduce((s, r) => s + r.length, 0);
     if (score && (!best || score > best.score)) best = { x, runs, score };
+  }
+  // Not columns: table rows, whose cells leave a second channel of white space down one side (word gaps, even in
+  // loose justified lines, are scattered), and code with trailing comments, whose right side is comments.
+  if (best) {
+    const x = best.x;
+    const channel = (run, l) => {
+      const ws = run.map(i => ink[i].filter(([a, b]) => l ? b <= x : a >= x)).filter(w => w.length);
+      const gutter = median(run.map(i => ink[i]).filter(w => w.some(([, b]) => b <= x) && w.some(([a]) => a >= x)).map(w => w.find(([a]) => a >= x)[0] - w.filter(([, b]) => b <= x).pop()[1])) || 0;
+      // a narrow first stretch is a line number or a bullet, not a cell
+      const gaps = ws.map(w => w.slice(1).map((s, k) => [w[k][1], s[0], k]).filter(([a, b, k]) => b - a >= gutter * 0.5 && (k || w[0][1] - w[0][0] >= span * 0.04)));
+      const lo = Math.min(...ws.map(w => w[0][0])), hi = Math.max(...ws.map(w => w[w.length - 1][1]));
+      for (let c = lo; c <= hi; c += 2) if (gaps.filter(gs => gs.some(([a, b]) => a <= c && b >= c)).length >= ws.length * 0.6) return true;
+      return false;
+    };
+    const comments = (run) => run.filter(i => /^\s*(#|\/\/|\/\*|--|;)/.test(lines[i].items.filter(g => g.x >= x).sort((p, q) => p.x - q.x).map(g => g.str).join(''))).length >= run.length / 2;
+    best.runs = best.runs.filter(r => !channel(r, true) && !channel(r, false) && !comments(r));
+    if (!best.runs.length) best = null;
   }
   if (!best) return lines;
   const out = [];
