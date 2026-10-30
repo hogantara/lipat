@@ -92,7 +92,7 @@ function decodeScore(text) {
     else if (glued) score -= 1;
     else if (COMMON.has(c) || /[ぁ-ゟ]/.test(c)) score += 2;                           // frequent CJK, Hangul, hiragana
     else if (/[　-〿！-～]/.test(c)) score += 1;                               // CJK punctuation, full-width forms
-    else if (/[゠-ヿ一-鿿가-힣]/.test(c)) score += 0.5;                // katakana, Han, Hangul
+    else if (/[゠-ヿ一-鿿가-힣]/.test(c)) score += /[0-9]/.test(text[i - 1] || '') ? -1 : 0.5; // katakana, Han, Hangul (after a digit: 180°C read as GBK)
     else if (/[Ѐ-џ]/.test(c) && !/[Ѐ-џ]/.test(text[i - 1] + text[i + 1])) score -= 1; // lone Cyrillic: a Western sign read as cp1251
     else if (/[а-џ]/.test(c)) score += 1;                                             // Cyrillic prose is mostly lower case
     else if (/[Ѐ-Я]/.test(c)) score += 0.3;
@@ -194,10 +194,11 @@ export async function parseHtml(file) {
   const text = await readText(file);
   const doc = new DOMParser().parseFromString(text, 'text/html');
   const title = (doc.querySelector('title')?.textContent || prettyName(file.name)).trim();
-  // one top-level <article> is the page's content (comments nested in it don't count); several are posts, keep them all
+  // <main> is the content. Without it, one top-level <article> is (comments nested in it don't count); several are
+  // posts, keep them all
   const posts = [...doc.querySelectorAll('article')].filter(a => !a.parentElement.closest('article'));
   const shared = posts.length > 1 && posts.every(a => a.parentElement === posts[0].parentElement) && posts[0].parentElement;
-  let main = (posts.length === 1 && posts[0]) || doc.querySelector('main') || shared || doc.body;
+  let main = doc.querySelector('main') || (posts.length === 1 && posts[0]) || shared || doc.body;
   main.querySelectorAll('script, style, nav, header, footer, aside, noscript, iframe').forEach(n => n.remove());
   // a lone wrapper (<main><article>, <div class=entry-content>) would hide the h1/h2 splits and the TOC
   while (main.children.length === 1 && /^(ARTICLE|MAIN|SECTION|DIV)$/.test(main.firstElementChild.tagName)
@@ -316,7 +317,6 @@ export async function parseEpub(file, onProgress) {
     manifest[it.getAttribute('id')] = { href: it.getAttribute('href'), type: it.getAttribute('media-type') || '', props: it.getAttribute('properties') || '' };
   });
   const spine = Array.from(opf.querySelectorAll('spine > itemref')).map(r => r.getAttribute('idref')).filter(id => manifest[id]);
-  const bookDir = opf.querySelector('spine')?.getAttribute('page-progression-direction');
 
   // cover
   let cover = null;
@@ -373,10 +373,11 @@ export async function parseEpub(file, onProgress) {
     });
     body.querySelectorAll('script, style, link, nav[hidden]').forEach(n => n.remove());
     // Direction and language live on <html> and <body>, which are dropped: move them onto the blocks. A chapter that
-    // declares none follows the spine, then its own text (right-to-left set in CSS only).
+    // declares none follows its own text (right-to-left set in CSS only). The spine's page-progression-direction is
+    // page order, not text direction: vertical Japanese and Chinese books set it to rtl.
     const root = body.ownerDocument.documentElement;
     const attr = (name) => body.getAttribute(name) || body.getAttribute('xml:' + name) || root.getAttribute(name) || root.getAttribute('xml:' + name);
-    let textDir = (attr('dir') || bookDir || '').toLowerCase();
+    let textDir = (attr('dir') || '').toLowerCase();
     if (textDir !== 'ltr' && textDir !== 'rtl') { const t = body.textContent; textDir = (t.match(RTL_CHARS_G) || []).length > (t.match(/\p{L}/gu) || []).length / 2 ? 'rtl' : ''; }
     const lang = attr('lang');
     for (const el of Array.from(body.children)) {
@@ -455,7 +456,7 @@ export async function parseEpub(file, onProgress) {
 export async function safeCover(bytes) {
   const at = (i, s) => [...s].every((ch, k) => bytes[i + k] === ch.charCodeAt(0));
   const type = at(0, '\xFF\xD8\xFF') ? 'image/jpeg' : at(0, '\x89PNG') ? 'image/png' : at(0, 'GIF8') ? 'image/gif'
-    : at(0, 'RIFF') && at(8, 'WEBP') ? 'image/webp' : at(4, 'ftyp') && /avi[fs]/.test(String.fromCharCode(...bytes.subarray(8, 32))) ? 'image/avif' : '';
+    : at(0, 'BM') ? 'image/bmp' : at(0, 'RIFF') && at(8, 'WEBP') ? 'image/webp' : at(4, 'ftyp') && /avi[fs]/.test(String.fromCharCode(...bytes.subarray(8, 32))) ? 'image/avif' : '';
   if (type) return new Blob([bytes], { type });
   const svg = new DOMParser().parseFromString(new TextDecoder().decode(bytes), 'image/svg+xml').documentElement;
   if (svg.localName !== 'svg') return null;
@@ -633,10 +634,20 @@ function columnOrder(lines) {
       const left = [], right = [];
       for (const i of run) {
         const lw = ink[i].filter(([, b]) => b <= x), rw = ink[i].filter(([a]) => a >= x);
-        if (lw.length) left.push(lw[lw.length - 1][1] - lw[0][0]);
-        if (rw.length) right.push(rw[rw.length - 1][1] - rw[0][0]);
+        if (lw.length) left.push(lw);
+        if (rw.length) right.push(rw);
       }
-      if (left.length >= 3 && right.length >= 3 && median(left) >= span * 0.25 && median(right) >= span * 0.25) runs.push(run);
+      // A column of prose: one stretch of ink per line, lines starting at one edge and most running to the other.
+      // Table cells (several stretches, ragged ends) are not columns.
+      const prose = (side) => {
+        if (side.length < 3 || median(side.map(w => w[w.length - 1][1] - w[0][0])) < span * 0.25) return false;
+        const starts = side.map(w => w[0][0]), ends = side.map(w => w[w.length - 1][1]);
+        const s0 = Math.min(...starts), e1 = Math.max(...ends), share = (f) => side.filter(f).length / side.length;
+        return share(w => w.length === 1) >= 0.7 && share(w => w[0][0] <= s0 + span * 0.06) >= 0.7 && share(w => w[w.length - 1][1] >= e1 - span * 0.12) >= 0.6;
+      };
+      // and the left column runs up to a narrow gutter (code comments and table cells leave a wide gap)
+      const gap = () => Math.min(...right.map(w => w[0][0])) - median(left.map(w => w[w.length - 1][1]));
+      if (prose(left) && prose(right) && gap() <= span * 0.12) runs.push(run);
       run = [];
     };
     lines.forEach((l, i) => { if (ink[i].some(([a, b]) => a < x && b > x)) close(); else run.push(i); });
@@ -766,7 +777,7 @@ function reflowPages(pages, outline) {
       }
       // Small print ended the last page (footnotes) or starts this one (a running head): body text that carries
       // on continues the paragraph it interrupted, and the small print moves after that paragraph.
-      let cont = false, mark = marker;
+      let cont = false, marks = marker ? [marker] : [];
       if (cur && cur.type === 'p' && isFn(cur) && !isFn(l) && (brk || cur.marker === pg.num)) {
         flush();
         let i = blocks.length - 1;
@@ -774,7 +785,8 @@ function reflowPages(pages, outline) {
         const b = blocks[i];
         if (b && b.type === 'p' && !startsPara(l, b.last, b, true)) {
           const notes = blocks.splice(i + 1);
-          for (const n of notes) if (n.marker) { mark = n.marker; n.marker = null; }
+          // the small print's own page markers go in front of this page's
+          marks = [...notes.filter(n => n.marker).map(n => { const m = n.marker; n.marker = null; return m; }), ...marks];
           cur = blocks.pop(); cur.notes = notes; prev = cur.last; cont = true;
         }
       }
@@ -784,7 +796,7 @@ function reflowPages(pages, outline) {
       } else {
         const hyph = /[a-z]-$/.test(cur.text) && /^[a-z]/.test(l.text);
         // a page that starts inside the paragraph gets its marker where its text starts (a split word: before it)
-        if (mark) (cur.pgs = cur.pgs || []).push([hyph ? cur.text.lastIndexOf(' ') + 1 : cur.text.length + 1, mark]);
+        for (const m of marks) (cur.pgs = cur.pgs || []).push([hyph ? cur.text.lastIndexOf(' ') + 1 : cur.text.length + 1, m]);
         cur.text = hyph ? cur.text.slice(0, -1) + l.text : cur.text + ' ' + l.text;
         cur.ind = Math.min(cur.ind, l.ind); cur.n++; cur.last = l;
       }

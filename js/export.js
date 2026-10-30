@@ -11,7 +11,7 @@ const LABEL = Object.fromEntries(REACTIONS.map(r => [r.e, r.label]));
 export const safeName = (s) => String(s || 'Untitled').replace(/[\\/:*?"<>|#%]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) || 'Untitled';
 const fmtDate = (ts) => new Date(ts).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 const secIndex = (sid) => Number(String(sid || 's0').slice(1)) || 0;
-const orderKey = (m) => secIndex(m.sectionId) * 1e7 + (m.type === 'bookmark' ? (m.blockIndex || 0) * 1e3 : (m.start || 0));
+const orderKey = (m) => secIndex(m.sectionId) * 1e7 + (m.type === 'bookmark' ? ((m.blockIndex || 0) + (m.frac || 0)) * 1e3 : (m.start || 0));
 const sortMarks = (ms) => ms.slice().sort((a, b) => orderKey(a) - orderKey(b));
 const quote = (t) => String(t || '').trim().split(/\n+/).map(l => '> ' + l).join('\n');
 const tag = (m) => m.type === 'bookmark' ? '🔖 Bookmark' : m.emoji ? `${m.emoji} ${LABEL[m.emoji] || ''}`.trim() : '✎ Note';

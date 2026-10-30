@@ -287,7 +287,7 @@ body.chrome-hidden .rd-bottom { opacity: 0; transform: translateY(8px); pointer-
 @keyframes flash { 0% { background: rgba(var(--hl-base), .6); } 100% { background: transparent; } }
 
 /* zoomed pages keep their shape and grow past the screen; the scroller pans sideways in original layout */
-.rd-scroller:has(> .rd-pages:not([hidden])) { overflow-x: auto; }
+.rd-scroller:has(> .rd-pages:not([hidden])) { overflow-x: auto; scrollbar-gutter: stable; }
 .rd-pages { padding: calc(var(--sat) + 60px) 16px 140px; width: max-content; min-width: 100%; display: flex; flex-direction: column; align-items: center; gap: 18px; }
 .rd-pages canvas { box-shadow: var(--shadow); background: #fff; border-radius: 3px; }
 .rd-pages .pgwrap { position: relative; }
@@ -382,7 +382,9 @@ body[data-theme="night"] .rd-pages canvas { filter: invert(.9) hue-rotate(180deg
 .seg.themes i { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); display: block; }
 .seg.themes button.is-active i { box-shadow: 0 0 0 2px var(--accent); }
 
-.rd-loading { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 12px; background: var(--bg); z-index: 9; color: var(--ink-2); font-size: 14px; }
+.rd-loading { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 12px; background: var(--bg); z-index: 30; color: var(--ink-2); font-size: 14px; }
+/* original layout loading: under the bars, so Back stays in reach */
+.rd-loading.under-bars { z-index: 9; }
 
 ::selection { background: rgba(var(--hl-base), .45); }
 @media (pointer: coarse) { .rd-content { -webkit-user-select: none; user-select: none; } }

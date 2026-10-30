@@ -171,20 +171,23 @@ export class Reader {
   async open(book) {
     this.book = book;
     this.view.hidden = false;
-    $('#rd-loading').hidden = false;
+    $('#rd-loading').hidden = false; $('#rd-loading').classList.remove('under-bars');
     $('#rd-book-title').textContent = book.title;
     $('#rd-chapter').textContent = '';
     document.body.classList.remove('chrome-hidden');
     this.closeEditor(); this.hideBubble(); this.panel.hidden = true; this.typePop.hidden = true;
     this.marks = await db.marksForBook(book.id);
+    if (this.book !== book) return;
     this.textCache.clear();
     await nextFrame();
+    if (this.book !== book) return;
     this._render();
     $$('[data-act="layout"]', this.view).forEach(b => { b.hidden = book.format !== 'pdf'; b.classList.remove('is-on'); });
     this.pageMode = false; this.pagesEl.hidden = true; this.content.hidden = false;
     this._removeZoomCtl();
     this.renderToc(); this.renderMarksList();
     await nextFrame();
+    if (this.book !== book) return;
     this._restorePosition();
     $('#rd-loading').hidden = true;
     if (book.isScanned) { this.toast('No text layer in this PDF. Showing pages instead.'); this.setPageMode(true); }
@@ -231,8 +234,11 @@ export class Reader {
   _blocks(el) {
     let blocks = Array.from(el.children), depth = 0;
     while (blocks.length === 1 && WRAPPER.test(blocks[0].tagName)) {
+      // only a wrapper of real blocks: loose text or <br>s mean its children are inline (em, a, mark, br)
+      const w = blocks[0];
+      if ([...w.childNodes].some(n => n.nodeType === 3 && n.data.trim() || n.nodeName === 'BR')) break;
       // a bookmark pin is not a block
-      const inner = Array.from(blocks[0].children).filter(c => !c.classList.contains('bm-pin'));
+      const inner = Array.from(w.children).filter(c => !c.classList.contains('bm-pin'));
       if (!inner.length || inner.length === 1 && !WRAPPER.test(inner[0].tagName)) break;
       blocks = inner; depth++;
     }
@@ -276,12 +282,13 @@ export class Reader {
     clearTimeout(this.saveTimer);
     const run = () => {
       if (!this.book) return;
-      const a = this.pageMode ? null : this._visibleAnchor();
+      const paged = this.pageMode && !this.pagesEl.hidden;
+      const a = paged ? null : this._visibleAnchor();
       const max = this.scroller.scrollHeight - this.scroller.clientHeight;
       const pct = max > 0 ? this.scroller.scrollTop / max : 0;
       // original layout: the page is the position (the reflow anchor is still where L was pressed)
       const n = this.book.pageCount || 1, pg = this.currentPage || 1;
-      const patch = { progress: this.pageMode ? { page: pg, pct: n > 1 ? (pg - 1) / (n - 1) : 0 } : { ...(a ? { sectionId: a.sectionId, blockIndex: a.blockIndex, frac: a.frac, depth: a.depth } : this.book.progress || {}), pct, page: this.currentPage || null } };
+      const patch = { progress: paged ? { page: pg, pct: n > 1 ? (pg - 1) / (n - 1) : 0 } : { ...(a ? { sectionId: a.sectionId, blockIndex: a.blockIndex, frac: a.frac, depth: a.depth } : this.book.progress || {}), pct, page: this.currentPage || null } };
       Object.assign(this.book, patch);
       db.updateBook(this.book.id, patch);
     };
@@ -289,7 +296,7 @@ export class Reader {
   }
   _restorePosition() {
     const p = this.book.progress;
-    this.currentPage = p?.page || null;
+    this.currentPage = this.book.format === 'pdf' ? p?.page || null : null;
     if (p && p.sectionId) this._scrollToAnchor(p);
     else {
       this.scroller.scrollTop = 0;
@@ -312,6 +319,8 @@ export class Reader {
       else if (dy < 0) document.body.classList.remove('chrome-hidden');
     }
     this.lastScroll = st;
+    // short pages (slides, zoomed out) never reach the current-page line at the end of the document
+    if (this.pageMode && this.pdf && !this.pagesEl.hidden && max > 0 && st >= max - 2) this.currentPage = this.pdf.numPages;
     if (!this.pending) this.bubble.hidden = true;
     this._updateMeta();
     this._savePosition();
@@ -371,13 +380,13 @@ export class Reader {
     const map = { 'font-family': 'font', 'line-height': 'lh', 'measure': 'measure', 'theme-seg': 'theme', 'justify': 'align' };
     for (const [id, key] of Object.entries(map)) $$('#' + id + ' button').forEach(b => b.classList.toggle('is-active', b.dataset.v === String(this.prefs[key])));
   }
-  togglePop() { this.typePop.hidden = !this.typePop.hidden; if (!this.typePop.hidden) { this.panel.hidden = true; this.closeEditor(); } this._syncScrim(); }
+  togglePop() { this.typePop.hidden = !this.typePop.hidden; if (!this.typePop.hidden) { this.panel.hidden = true; this.closeEditor(); this.hideBubble(); } this._syncScrim(); }
   _syncScrim() { this.scrim.hidden = !isMobile() || (this.panel.hidden && this.typePop.hidden && this.editor.hidden); }
 
   // ------------------------------------------------------------ panel
   togglePanel(tab, focusSearch = false) {
     if (tab === null || (!this.panel.hidden && this.activeTab === tab)) { this.panel.hidden = true; this._syncScrim(); return; }
-    this.panel.hidden = false; this.typePop.hidden = true; this.closeEditor();
+    this.panel.hidden = false; this.typePop.hidden = true; this.closeEditor(); this.hideBubble();
     this.showPanelTab(tab);
     this._syncScrim();
     if (focusSearch) { const si = $('#search-input'); si.focus(); si.select(); }
@@ -826,7 +835,7 @@ export class Reader {
     this.hideBubble(); this.closeEditor();
     if (on) {
       // the overlay sits under the top bar, so Back stays in reach while pdf.js loads
-      $('#rd-loading').hidden = false; document.body.classList.remove('chrome-hidden');
+      $('#rd-loading').hidden = false; $('#rd-loading').classList.add('under-bars'); document.body.classList.remove('chrome-hidden');
       let missing = false;
       try {
         if (!this.pdf) {
@@ -902,6 +911,7 @@ export class Reader {
     const current = new IntersectionObserver((entries) => {
       if (!this.book || !this.pageMode) return;
       for (const e of entries) if (e.isIntersecting && e.target.isConnected) this.currentPage = Number(e.target.dataset.page);
+      if (sc.scrollTop >= sc.scrollHeight - sc.clientHeight - 2 && sc.scrollTop > 0) this.currentPage = this.pdf.numPages;
       this._updateMeta();
     }, { root: sc, rootMargin: '-30% 0px -69% 0px' });
     const observers = [render, release, current];

@@ -34,7 +34,7 @@ const coverUrls = new Map();
 // covers stored before formats.js checked them may hold script (SVG, HTML): only raster types get a URL, the rest are redrawn once
 function coverUrl(book) {
   if (!book.cover) return null;
-  if (!/^image\/(jpeg|png|gif|webp|avif)$/.test(book.cover.type)) {
+  if (!/^image\/(jpeg|png|gif|webp|avif|bmp)$/.test(book.cover.type)) {
     const old = book.cover; book.cover = null;
     old.arrayBuffer().then(b => safeCover(new Uint8Array(b))).then(c => {
       db.updateBook(book.id, { cover: c });
@@ -261,7 +261,7 @@ function filteredMarks() {
 }
 function markOrder(m) {
   const si = Number(String(m.sectionId || 's0').slice(1)) || 0;
-  return si * 1e7 + (m.type === 'bookmark' ? (m.blockIndex || 0) * 1e3 : (m.start || 0));
+  return si * 1e7 + (m.type === 'bookmark' ? ((m.blockIndex || 0) + (m.frac || 0)) * 1e3 : (m.start || 0));
 }
 function renderMarksTab() {
   const bookById = Object.fromEntries(state.books.map(b => [b.id, b]));
