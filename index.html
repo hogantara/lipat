@@ -123,7 +123,8 @@
             <dt><kbd>1</kbd> to <kbd>5</kbd></dt><dd>React to the selection</dd>
             <dt><kbd>N</kbd></dt><dd>Keep the selection with a note</dd>
             <dt><kbd>B</kbd></dt><dd>Bookmark this spot</dd>
-            <dt><kbd>C</kbd></dt><dd>Contents and marks</dd>
+            <dt><kbd>C</kbd></dt><dd>Contents</dd>
+            <dt><kbd>M</kbd></dt><dd>Marks in this book</dd>
             <dt><kbd>F</kbd></dt><dd>Find in book</dd>
             <dt><kbd>L</kbd></dt><dd>Original page layout (PDF)</dd>
             <dt><kbd>T</kbd></dt><dd>Theme</dd>
@@ -135,7 +136,7 @@
 
   <nav class="tabbar mobile-only">
     <button class="tb is-active" data-libtab="shelf"><span class="tb-ic"><i class="ph ph-books" aria-hidden="true"></i><i class="ph-fill ph-books" aria-hidden="true"></i></span><span>Shelf</span></button>
-    <button class="tb" data-libtab="marks"><span class="tb-ic"><i class="ph ph-bookmark-simple" aria-hidden="true"></i><i class="ph-fill ph-bookmark-simple" aria-hidden="true"></i><span class="count marks-count"></span></span><span>Marks</span></button>
+    <button class="tb" data-libtab="marks"><span class="tb-ic"><i class="ph ph-highlighter" aria-hidden="true"></i><i class="ph-fill ph-highlighter" aria-hidden="true"></i><span class="count marks-count"></span></span><span>Marks</span></button>
     <button class="tb" data-libtab="settings"><span class="tb-ic"><i class="ph ph-gear-six" aria-hidden="true"></i><i class="ph-fill ph-gear-six" aria-hidden="true"></i></span><span>Settings</span></button>
   </nav>
 
@@ -161,14 +162,17 @@
       <button class="icon-btn" data-act="layout" title="Original layout (L)" aria-label="Toggle original page layout" hidden>
         <i class="ph ph-file-text" aria-hidden="true"></i>
       </button>
+      <button class="icon-btn" data-act="contents" title="Contents (C)" aria-label="Contents">
+        <i class="ph ph-list" aria-hidden="true"></i>
+      </button>
+      <button class="icon-btn" data-act="marks" title="Marks in this book (M)" aria-label="Marks in this book">
+        <i class="ph ph-highlighter" aria-hidden="true"></i>
+      </button>
       <button class="icon-btn" data-act="search" title="Search (F)" aria-label="Search in book">
         <i class="ph ph-magnifying-glass" aria-hidden="true"></i>
       </button>
       <button class="icon-btn" data-act="bookmark" title="Bookmark this spot (B)" aria-label="Bookmark">
         <i class="ph ph-bookmark-simple" aria-hidden="true"></i>
-      </button>
-      <button class="icon-btn" data-act="contents" title="Contents & marks (C)" aria-label="Contents">
-        <i class="ph ph-list" aria-hidden="true"></i>
       </button>
       <button class="icon-btn" data-act="type" title="Text settings (A)" aria-label="Text settings"><span class="aa">Aa</span></button>
     </div>
@@ -191,14 +195,14 @@
       <button class="icon-btn" data-act="contents" aria-label="Contents">
         <i class="ph ph-list" aria-hidden="true"></i>
       </button>
+      <button class="icon-btn" data-act="marks" aria-label="Marks in this book">
+        <i class="ph ph-highlighter" aria-hidden="true"></i>
+      </button>
       <button class="icon-btn" data-act="search" aria-label="Search in book">
         <i class="ph ph-magnifying-glass" aria-hidden="true"></i>
       </button>
       <button class="icon-btn" data-act="bookmark" aria-label="Bookmark">
         <i class="ph ph-bookmark-simple" aria-hidden="true"></i>
-      </button>
-      <button class="icon-btn" data-act="marks" aria-label="Marks in this book">
-        <i class="ph ph-note-pencil" aria-hidden="true"></i>
       </button>
       <button class="icon-btn" data-act="type" aria-label="Text settings"><span class="aa">Aa</span></button>
     </div>

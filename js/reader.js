@@ -1008,6 +1008,7 @@ export class Reader {
       case '-': case '_': this.setPref('size', clamp(this.prefs.size - 1, 14, 34)); break;
       case 'b': case 'B': this.toggleBookmark(); break;
       case 'c': case 'C': this.togglePanel('toc'); break;
+      case 'm': case 'M': this.togglePanel('marks'); break;
       case 'a': case 'A': this.togglePop(); break;
       case 'l': case 'L': if (this.book.format === 'pdf') this.setPageMode(!this.pageMode); break;
       case 't': case 'T': { const order = ['paper', 'sepia', 'mist', 'night']; this.setPref('theme', order[(order.indexOf(this.prefs.theme) + 1) % order.length]); break; }
