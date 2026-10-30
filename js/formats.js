@@ -237,13 +237,21 @@ function splitHtmlIntoSections(html, title, format) {
 export async function parseEpub(file, onProgress) {
   await loadScript(CDN.jszip);
   const zip = await window.JSZip.loadAsync(file);
-  const xml = async (path) => new DOMParser().parseFromString(await zip.file(path).async('text'), 'application/xml');
+  // Real-world EPUBs drift from the spec: byte-order marks, paths whose case differs from the zip entry,
+  // stray % in hrefs, files the manifest lists but the zip lacks. Look up leniently; missing means skip.
+  const lowerNames = new Map(Object.keys(zip.files).map(n => [n.toLowerCase(), n]));
+  const entry = (path) => { if (!path) return null; const n = zip.file(path) ? path : lowerNames.get(path.toLowerCase()); return n ? zip.file(n) : null; };
+  const readEntry = async (path) => { const f = entry(path); return f ? (await f.async('text')).replace(/^\uFEFF/, '') : null; };
+  const xml = async (path) => { const src = await readEntry(path); return src == null ? null : new DOMParser().parseFromString(src, 'application/xml'); };
   const container = await xml('META-INF/container.xml');
-  const opfPath = container.querySelector('rootfile').getAttribute('full-path');
+  let opfPath = container?.querySelector('rootfile')?.getAttribute('full-path');
+  if (!entry(opfPath)) opfPath = Object.keys(zip.files).find(n => /\.opf$/i.test(n));
+  if (!opfPath) throw new Error('No package file (.opf) in EPUB');
   const opfDir = opfPath.includes('/') ? opfPath.slice(0, opfPath.lastIndexOf('/') + 1) : '';
   const opf = await xml(opfPath);
+  const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
   const resolve = (href, base = opfDir) => {
-    href = decodeURIComponent(href.split('#')[0]);
+    href = decode((href || '').split('#')[0]);
     const parts = (base + href).split('/');
     const out = [];
     for (const p of parts) { if (p === '..') out.pop(); else if (p !== '.' && p !== '') out.push(p); }
@@ -266,7 +274,7 @@ export async function parseEpub(file, onProgress) {
   let coverId = Object.keys(manifest).find(id => manifest[id].props.includes('cover-image'));
   if (!coverId) { const m = opf.querySelector('meta[name="cover"]'); if (m) coverId = m.getAttribute('content'); }
   if (coverId && manifest[coverId]) {
-    const f = zip.file(resolve(manifest[coverId].href));
+    const f = entry(resolve(manifest[coverId].href));
     if (f) cover = new Blob([await f.async('arraybuffer')], { type: manifest[coverId].type || 'image/jpeg' });
   }
 
@@ -274,7 +282,7 @@ export async function parseEpub(file, onProgress) {
   const resCache = new Map();
   async function resource(path) {
     if (resCache.has(path)) return resCache.get(path);
-    const f = zip.file(path);
+    const f = entry(path);
     if (!f) { resCache.set(path, null); return null; }
     const ext = path.split('.').pop().toLowerCase();
     const mime = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', svg: 'image/svg+xml', webp: 'image/webp' }[ext] || 'application/octet-stream';
@@ -291,9 +299,8 @@ export async function parseEpub(file, onProgress) {
     onProgress(`Unpacking chapter ${++i} of ${spine.length}…`);
     const item = manifest[id];
     const path = resolve(item.href);
-    const f = zip.file(path);
-    if (!f) continue;
-    const src = await f.async('text');
+    const src = await readEntry(path);
+    if (src == null) continue;
     const doc = new DOMParser().parseFromString(src, 'application/xhtml+xml');
     let body = doc.querySelector('body');
     if (!body || doc.querySelector('parsererror')) { body = new DOMParser().parseFromString(src, 'text/html').body; }
@@ -336,7 +343,8 @@ export async function parseEpub(file, onProgress) {
   const navId = Object.keys(manifest).find(id => manifest[id].props.includes('nav'));
   if (navId) {
     const navPath = resolve(manifest[navId].href);
-    const navDoc = new DOMParser().parseFromString(await zip.file(navPath).async('text'), 'application/xhtml+xml');
+    const navSrc = await readEntry(navPath);
+    const navDoc = new DOMParser().parseFromString(navSrc || '<html/>', 'application/xhtml+xml');
     const navDir = navPath.includes('/') ? navPath.slice(0, navPath.lastIndexOf('/') + 1) : '';
     const nav = Array.from(navDoc.getElementsByTagName('*')).find(e => e.localName === 'nav' && (e.getAttribute('epub:type') === 'toc' || e.getAttributeNS('http://www.idpf.org/2007/ops', 'type') === 'toc')) || Array.from(navDoc.getElementsByTagName('*')).find(e => e.localName === 'nav');
     if (nav) {
@@ -372,7 +380,7 @@ export async function parseEpub(file, onProgress) {
           walk(np, depth + 1);
         });
       };
-      const navMap = ncx.querySelector('navMap');
+      const navMap = ncx?.querySelector('navMap');
       if (navMap) walk(navMap, 0);
     }
   }
