@@ -257,6 +257,9 @@ body.chrome-hidden .rd-bottom { opacity: 0; transform: translateY(8px); pointer-
 .rd-content .pg { display: block; height: 0; position: relative; margin: 0; }
 .rd-content .pg::after { content: attr(data-page); position: absolute; left: 0; top: -1.3em; font: 11px/1 var(--font-ui); color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .rd-content .pg.hard { margin: 1.6em 0 .6em; }
+/* a page that starts mid-paragraph: no line break, the number sits in the line before its first word */
+.rd-content p .pg { display: inline; }
+.rd-content p .pg::after { position: static; margin-right: .4em; }
 .rd-content .cover-page { text-align: center; padding: 6vh 0 4vh; }
 .rd-content .cover-page img { max-height: 60vh; width: auto; box-shadow: var(--shadow); }
 .rd-content .title-block { padding: 12vh 0 8vh; text-align: center; }
@@ -276,13 +279,17 @@ body.chrome-hidden .rd-bottom { opacity: 0; transform: translateY(8px); pointer-
 .rd-content mark.hl.last[data-emoji=""]::after { content: ""; margin: 0; }
 .rd-content mark.hl.last[data-emoji=""][data-note="1"]::after { content: "✎"; }
 .rd-content .bm-anchor { position: relative; }
-.rd-content .bm-anchor::before { content: ""; position: absolute; left: -16px; top: .25em; width: 9px; height: 14px; background: var(--accent); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 70%, 0 100%); border-radius: 1px; }
+.rd-content .bm-in { position: relative; }
+.rd-content .bm-pin { position: absolute; left: 0; height: 0; }
+.rd-content .bm-anchor::before, .rd-content .bm-pin::before { content: ""; position: absolute; left: -16px; top: .25em; width: 9px; height: 14px; background: var(--accent); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 70%, 0 100%); border-radius: 1px; }
 .rd-content .search-hit { background: rgba(var(--hl-base), .9); color: #171717; border-radius: 2px; }
 .rd-content .flash { animation: flash 1.6s var(--ease); }
 @keyframes flash { 0% { background: rgba(var(--hl-base), .6); } 100% { background: transparent; } }
 
-.rd-pages { padding: calc(var(--sat) + 60px) 0 140px; display: flex; flex-direction: column; align-items: center; gap: 18px; }
-.rd-pages canvas { box-shadow: var(--shadow); background: #fff; border-radius: 3px; max-width: 100%; height: auto; }
+/* zoomed pages keep their shape and grow past the screen; the scroller pans sideways in original layout */
+.rd-scroller:has(> .rd-pages:not([hidden])) { overflow-x: auto; }
+.rd-pages { padding: calc(var(--sat) + 60px) 16px 140px; width: max-content; min-width: 100%; display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.rd-pages canvas { box-shadow: var(--shadow); background: #fff; border-radius: 3px; }
 .rd-pages .pgwrap { position: relative; }
 .rd-pages .pgnum { position: absolute; left: 50%; transform: translateX(-50%); bottom: -16px; font-size: 11px; color: var(--ink-3); }
 body[data-theme="night"] .rd-pages canvas { filter: invert(.9) hue-rotate(180deg); }
@@ -375,7 +382,7 @@ body[data-theme="night"] .rd-pages canvas { filter: invert(.9) hue-rotate(180deg
 .seg.themes i { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); display: block; }
 .seg.themes button.is-active i { box-shadow: 0 0 0 2px var(--accent); }
 
-.rd-loading { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 12px; background: var(--bg); z-index: 30; color: var(--ink-2); font-size: 14px; }
+.rd-loading { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 12px; background: var(--bg); z-index: 9; color: var(--ink-2); font-size: 14px; }
 
 ::selection { background: rgba(var(--hl-base), .45); }
 @media (pointer: coarse) { .rd-content { -webkit-user-select: none; user-select: none; } }
@@ -409,7 +416,7 @@ body[data-theme="night"] .rd-pages canvas { filter: invert(.9) hue-rotate(180deg
   .rd-bottom { padding: 6px 24px 10px; }
   .rd-content { padding: 84px 24px 45vh; }
   .rd-content .pg::after { left: auto; right: calc(100% + 18px); top: -.6em; }
-  .rd-content .bm-anchor::before { left: -22px; width: 10px; }
+  .rd-content .bm-anchor::before, .rd-content .bm-pin::before { left: -22px; width: 10px; }
   .rd-meta { margin-top: 0; }
   .zoom-ctl { bottom: 70px; right: 18px; }
   .sheet { position: absolute; left: auto; bottom: auto; border-radius: var(--r-m); border: 1px solid var(--line); box-shadow: var(--shadow); animation: pop .18s var(--ease); max-height: none; padding: 12px 14px; }
@@ -426,3 +433,10 @@ body[data-theme="night"] .rd-pages canvas { filter: invert(.9) hue-rotate(180deg
   .me-note { resize: vertical; font-size: 14px; }
   .scrim { display: none !important; }
 }
+
+/* rtl */
+/* Books carry dir on their blocks. Left alignment means start alignment, so right-to-left text sits flush right. */
+.rd-content[data-align="left"], .rd-content h1, .rd-content h2, .rd-content h3, .rd-content h4 { text-align: start; }
+.rd-content ul:dir(rtl), .rd-content ol:dir(rtl) { padding-left: 0; padding-right: 1.4em; }
+.rd-content blockquote:dir(rtl) { padding-left: 0; padding-right: 1em; border-left: 0; border-right: 3px solid var(--bg-3); }
+.rd-content .title-block h1, .rd-content .title-block p { unicode-bidi: plaintext; }
