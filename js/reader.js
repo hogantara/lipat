@@ -450,16 +450,26 @@ export class Reader {
     if (q.length < 2) { ul.innerHTML = ''; sum.textContent = ''; return; }
     const needle = q.toLowerCase();
     const hits = [];
+    // textContent runs blocks together ("TrailKeeps"), so snippets are cut with a space at each block
+    // break, and a match that spans a break (the end of one paragraph and the start of the next) is skipped.
+    const flat = (s) => s.replace(/\s+/g, ' ');
     for (const s of this.book.sections) {
-      const text = this._sectionText(s.id); const low = text.toLowerCase();
+      const el = this.sectionEls.get(s.id), text = this._sectionText(s.id), low = text.toLowerCase();
+      const breaks = this._breaks(el, text);
       let i = 0;
       while ((i = low.indexOf(needle, i)) !== -1 && hits.length < 200) {
-        hits.push({ sid: s.id, start: i, end: i + q.length, ctx: text.slice(Math.max(0, i - 60), i), after: text.slice(i + q.length, i + q.length + 70), title: s.title });
-        i += q.length;
+        const end = i + q.length;
+        if (!breaks.some(x => x > i && x < end)) {
+          const from = Math.max(0, i - 60), to = Math.min(text.length, end + 70);
+          hits.push({ sid: s.id, start: i, end, title: s.title, hit: flat(text.slice(i, end)),
+            ctx: (from > 0 ? '…' : '') + flat(this._textOf(el, from, i, text) + (breaks.includes(i) ? ' ' : '')).trimStart(),
+            after: flat((breaks.includes(end) ? ' ' : '') + this._textOf(el, end, to, text)).trimEnd() + (to < text.length ? '…' : '') });
+        }
+        i = end;
       }
     }
     sum.textContent = hits.length ? `${hits.length}${hits.length >= 200 ? '+' : ''} result${hits.length === 1 ? '' : 's'}` : 'No results';
-    ul.innerHTML = hits.map((h, i) => `<li><button data-i="${i}">${h.title ? `<small>${esc(h.title)}</small>` : ''}…${esc(h.ctx)}<b>${esc(this._sectionText(h.sid).slice(h.start, h.end))}</b>${esc(h.after)}…</button></li>`).join('');
+    ul.innerHTML = hits.map((h, i) => `<li><button data-i="${i}">${h.title ? `<small>${esc(h.title)}</small>` : ''}${esc(h.ctx)}<b>${esc(h.hit)}</b>${esc(h.after)}</button></li>`).join('');
     ul.onclick = (ev) => { const b = ev.target.closest('button'); if (!b) return; this._showHit(hits[Number(b.dataset.i)]); if (isMobile()) this.togglePanel(null); };
   }
   _clearSearchHits() { $$('.search-hit', this.content).forEach(el => { const p = el.parentNode; p.replaceChild(document.createTextNode(el.textContent), el); p.normalize(); }); }

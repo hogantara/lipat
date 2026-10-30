@@ -5,7 +5,7 @@ import { Reader, EMOJIS, DEFAULT_PREFS, applyPrefs, isMobile } from './reader.js
 import { Drive, DriveError } from './drive.js';
 import { bookMarkdown, reactionMarkdown, indexMarkdown, allMarksMarkdown, safeName, REACTIONS } from './export.js';
 import { GOOGLE_CLIENT_ID, GOOGLE_API_KEY } from './config.js';
-export const BUILD = '2026-10-30.13';
+export const BUILD = '2026-10-30.14';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
