@@ -160,9 +160,26 @@ kbd { font: 12px/1 var(--font-ui); background: var(--card); border: 1px solid va
 .empty.small { margin-top: 6vh; }
 .empty h2 { font-size: 26px; font-weight: 600; letter-spacing: -.025em; line-height: 1.15; }
 .empty p { margin: 0; color: var(--ink-2); font-size: 15px; }
-.empty .formats { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
-.empty .formats span { font-size: 12px; font-weight: 500; color: var(--ink-2); background: var(--bg-2); padding: 4px 8px; border-radius: 6px; }
+/* formats are plain text, not chips: chips read as buttons */
+.empty .formats { font-size: 13px; color: var(--ink-3); }
 .empty .btn { margin-top: 10px; }
+/* Empty-state doodles, drawn with anidoodle (source in img/doodles/src). Each is three alpha masks painted
+   in the theme's own colours: tone (shadows), accent (the one green part), ink (the line). */
+.empty:has(.doodle) { margin-top: 4vh; }
+.doodle { position: relative; width: 100%; max-width: 340px; aspect-ratio: 960 / 520; margin: 0 0 6px -10px; }
+.doodle-marks { max-width: 230px; aspect-ratio: 720 / 540; margin-left: -14px; }
+.doodle span { position: absolute; inset: 0; -webkit-mask: center / contain no-repeat; mask: center / contain no-repeat; animation: doodle-in .7s var(--ease) both; }
+.doodle .d-tone { background: var(--ink); opacity: .35; }
+.doodle .d-accent { background: var(--accent); animation-delay: .25s; }
+.doodle .d-ink { background: var(--ink); }
+body[data-theme="night"] .doodle .d-tone { background: #000; opacity: .7; }
+.doodle-shelf .d-tone { -webkit-mask-image: url(../img/doodles/shelf-tone.webp); mask-image: url(../img/doodles/shelf-tone.webp); }
+.doodle-shelf .d-accent { -webkit-mask-image: url(../img/doodles/shelf-accent.webp); mask-image: url(../img/doodles/shelf-accent.webp); }
+.doodle-shelf .d-ink { -webkit-mask-image: url(../img/doodles/shelf-ink.webp); mask-image: url(../img/doodles/shelf-ink.webp); }
+.doodle-marks .d-tone { -webkit-mask-image: url(../img/doodles/marks-tone.webp); mask-image: url(../img/doodles/marks-tone.webp); }
+.doodle-marks .d-accent { -webkit-mask-image: url(../img/doodles/marks-accent.webp); mask-image: url(../img/doodles/marks-accent.webp); }
+.doodle-marks .d-ink { -webkit-mask-image: url(../img/doodles/marks-ink.webp); mask-image: url(../img/doodles/marks-ink.webp); }
+@keyframes doodle-in { from { opacity: 0; transform: translateY(6px); } }
 
 .drop-overlay { position: fixed; inset: 12px; border: 2px dashed var(--accent); border-radius: var(--r-l); background: color-mix(in srgb, var(--bg) 86%, transparent); display: grid; place-items: center; z-index: 50; font-size: 22px; font-weight: 600; letter-spacing: -.02em; color: var(--accent-ink); backdrop-filter: blur(4px); }
 
