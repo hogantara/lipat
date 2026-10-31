@@ -5,7 +5,7 @@ import { Reader, EMOJIS, DEFAULT_PREFS, applyPrefs, isMobile } from './reader.js
 import { Drive, DriveError } from './drive.js';
 import { bookMarkdown, reactionMarkdown, indexMarkdown, allMarksMarkdown, safeName, REACTIONS } from './export.js';
 import { GOOGLE_CLIENT_ID, GOOGLE_API_KEY } from './config.js';
-export const BUILD = '2026-10-30.14';
+export const BUILD = '2026-10-30.15';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -203,7 +203,11 @@ $('#add-scrim').onclick = closeAddMenu;
 $('#add-menu [data-add="device"]').onclick = () => { closeAddMenu(); pickFiles(); };
 $('#add-menu [data-add="drive"]').onclick = () => { closeAddMenu(); importFromDrive(); };
 document.addEventListener('pointerdown', (ev) => { if (!$('#add-menu').hidden && !ev.target.closest('#add-menu, #btn-add, #btn-add-empty')) closeAddMenu(); });
-document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && !$('#add-menu').hidden) closeAddMenu(); });
+document.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Escape' || $('#view-library').hidden) return;
+  if (!$('#add-menu').hidden) closeAddMenu();
+  else if (state.libtab !== 'shelf') showLibTab('shelf');
+});
 
 async function importFromDrive() {
   const details = (e) => ({ label: 'Details', fn: () => toast(String(e?.message || e).slice(0, 160)) });
@@ -244,6 +248,45 @@ function showLibTab(t) {
   $('#lib-title').textContent = !isMobile() || t === 'shelf' ? 'Lipat' : t === 'marks' ? 'Marks' : 'Settings';
   if (t === 'marks') renderMarksTab();
   if (t === 'settings') renderDriveStatus();
+}
+
+// ------------------------------------------------------------ back navigation
+// One history entry per open level, so Android back, browser back and the back gesture close the top
+// level instead of leaving the app. Levels: a non-Shelf tab, the reader, then whatever sits on top (a
+// reader layer or the Add menu). The UI opens and closes things directly; an observer then pushes or
+// rewinds history to match, so the back arrow, scrim, swipes and Escape all keep the stack in step.
+const nav = { depth: 0, going: false };
+function navLevels() {
+  const lv = [];
+  if (state.libtab !== 'shelf') lv.push('tab');
+  if (!reader.view.hidden) { lv.push('reader'); if (reader.hasLayer) lv.push('layer'); }
+  else if (!$('#add-menu').hidden) lv.push('menu');
+  return lv;
+}
+function navSync() {
+  if (nav.going) return; // wait for the rewind to land
+  const n = navLevels().length;
+  while (nav.depth < n) history.pushState({ lipat: ++nav.depth }, '');
+  if (nav.depth > n) { nav.going = true; history.go(n - nav.depth); }
+}
+function navClose(level) {
+  if (level === 'layer') reader.dismiss();
+  else if (level === 'reader') reader.close();
+  else if (level === 'menu') closeAddMenu();
+  else showLibTab('shelf');
+}
+window.addEventListener('popstate', (ev) => {
+  const d = ev.state?.lipat ?? 0;
+  if (nav.going) nav.going = false;
+  else for (let i = nav.depth; i > d; i--) { const lv = navLevels(); if (lv.length) navClose(lv[lv.length - 1]); }
+  nav.depth = d;
+  navSync();
+});
+function initNav() {
+  // after a reload the entries from the last visit are still there, so step back to the bare shelf
+  nav.depth = history.state?.lipat ?? 0;
+  new MutationObserver(navSync).observe(document.body, { subtree: true, attributeFilter: ['hidden', 'data-tab'] });
+  navSync();
 }
 
 // ------------------------------------------------------------ marks tab
@@ -481,6 +524,7 @@ function renderStorage() {
     onBack: async () => { $('#view-library').hidden = false; await loadAll(); if (sync.settings.connected && sync.settings.dirty.length) syncDrive(); },
     onMarksChanged: async (bookId) => { state.marks = await db.listMarks(); updateMarksCount(); markDirty(bookId); },
   });
+  initNav();
   await loadAll();
   renderDriveStatus();
   if ('serviceWorker' in navigator && location.protocol !== 'file:' && !new URLSearchParams(location.search).has('nosw')) navigator.serviceWorker.register('sw.js').catch(() => {});

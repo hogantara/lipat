@@ -991,17 +991,22 @@ export class Reader {
   _removeZoomCtl() { const z = $('#zoom-ctl'); if (z) z.remove(); }
 
   // ------------------------------------------------------------ keys
+  // something open over the page: the bubble, the mark editor, the Aa sheet or the panel
+  get hasLayer() { return !(this.bubble.hidden && this.editor.hidden && this.typePop.hidden && this.panel.hidden); }
+  // close the top one, the same order for Escape and system back
+  dismiss() {
+    if (!this.editor.hidden) this.closeEditor();
+    else if (!this.typePop.hidden) { this.typePop.hidden = true; this._syncScrim(); }
+    else if (!this.panel.hidden) this.togglePanel(null);
+    else if (!this.bubble.hidden) { this.hideBubble(); window.getSelection().removeAllRanges(); }
+    else return false;
+    return true;
+  }
   _onKey(ev) {
     if (!this.book || this.view.hidden) return;
     const tag = (ev.target.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || ev.target.isContentEditable;
-    if (ev.key === 'Escape') {
-      if (!this.editor.hidden) { this.closeEditor(); return; }
-      if (!this.typePop.hidden) { this.typePop.hidden = true; this._syncScrim(); return; }
-      if (!this.panel.hidden) { this.togglePanel(null); return; }
-      if (!this.bubble.hidden) { this.hideBubble(); window.getSelection().removeAllRanges(); return; }
-      this.close(); return;
-    }
+    if (ev.key === 'Escape') { if (!this.dismiss()) this.close(); return; }
     if ((ev.metaKey || ev.ctrlKey) && ev.key.toLowerCase() === 'f') { ev.preventDefault(); this.togglePanel('search', true); return; }
     if (typing) return;
     if (!this.bubble.hidden && /^[1-5]$/.test(ev.key)) { ev.preventDefault(); this.keepSelection(EMOJIS[Number(ev.key) - 1].e); return; }
