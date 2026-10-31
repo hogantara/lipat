@@ -288,6 +288,47 @@ function splitHtmlIntoSections(html, title, format, dir, lang) {
 }
 
 // ------------------------------------------------------------------ EPUB
+// Calibre and Kindle conversions keep the structure in CSS: every paragraph and heading is a <div class="class_s4y">
+// and italics are <span class="class_s3g">. The book's CSS is dropped, so read what each class means and turn it into
+// real tags. Only single-class selectors (.x, p.x) count; that is all these converters write.
+function cssHints(css) {
+  const out = new Map();
+  for (const m of css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}@]+)\{([^{}]*)\}/g)) {
+    const d = {};
+    for (const decl of m[2].split(';')) { const k = decl.indexOf(':'); if (k > 0) d[decl.slice(0, k).trim().toLowerCase()] = decl.slice(k + 1).replace(/!important/i, '').trim().toLowerCase(); }
+    for (const sel of m[1].split(',')) { const c = /^\s*[a-z0-9]*\.([\w-]+)\s*$/i.exec(sel); if (c) out.set(c[1], Object.assign(out.get(c[1]) || {}, d)); }
+  }
+  return out;
+}
+const FONT_KEYWORDS = { 'xx-small': .6, 'x-small': .75, small: .85, smaller: .85, medium: 1, large: 1.2, larger: 1.2, 'x-large': 1.5, 'xx-large': 2 };
+const fontScale = (v) => !v ? 1 : FONT_KEYWORDS[v] || (/r?em$/.test(v) ? parseFloat(v) : /%$/.test(v) ? parseFloat(v) / 100 : 1) || 1;
+const isBold = (s) => /bold/.test(s['font-weight'] || '') || parseInt(s['font-weight']) >= 600;
+const LEAF_BLOCK_SKIP = 'div, p, h1, h2, h3, h4, h5, h6, ul, ol, li, table, blockquote, figure, img, svg, pre, hr';
+function applyCssHints(body, hints) {
+  const doc = body.ownerDocument;
+  const style = (el) => { const s = {}; for (const c of (el.getAttribute('class') || '').split(/\s+/)) if (hints.has(c)) Object.assign(s, hints.get(c)); return s; };
+  const rename = (el, tag) => { const n = doc.createElement(tag); for (const a of Array.from(el.attributes)) n.setAttribute(a.name, a.value); while (el.firstChild) n.appendChild(el.firstChild); el.replaceWith(n); return n; };
+  const wrapInside = (el, tag) => { const n = doc.createElement(tag); while (el.firstChild) n.appendChild(el.firstChild); el.appendChild(n); };
+  for (const el of Array.from(body.querySelectorAll('span, a'))) {
+    const s = style(el);
+    if (/italic|oblique/.test(s['font-style'] || '')) wrapInside(el, 'em');
+    if (isBold(s)) wrapInside(el, 'strong');
+    if (s['vertical-align'] === 'super' || s['vertical-align'] === 'sub') wrapInside(el, s['vertical-align'] === 'super' ? 'sup' : 'sub');
+  }
+  for (let el of Array.from(body.querySelectorAll('div, p'))) {
+    if (el.querySelector(LEAF_BLOCK_SKIP)) continue;
+    const text = el.textContent.trim(); if (!text) continue;
+    const s = style(el), size = fontScale(s['font-size']), bold = isBold(s);
+    if (text.length < 160 && (size >= 1.2 || (bold && (size >= 1.1 || s['text-align'] === 'center')))) { rename(el, size >= 1.4 ? 'h2' : size >= 1.2 ? 'h3' : 'h4').removeAttribute('class'); continue; }
+    if (el.localName === 'div') el = rename(el, 'p');
+    // p.fn and p.it are the reader's own small-note and italic paragraph styles
+    const cls = size < .9 ? 'fn' : /italic|oblique/.test(s['font-style'] || '') ? 'it' : '';
+    if (cls) el.setAttribute('class', cls); else el.removeAttribute('class');
+  }
+  // the book's own class names mean nothing here and could collide with the reader's (.pg, .hl)
+  for (const el of Array.from(body.querySelectorAll('[class]'))) if (!(el.localName === 'p' && /^(fn|it)$/.test(el.getAttribute('class')))) el.removeAttribute('class');
+}
+
 export async function parseEpub(file, onProgress) {
   await loadScript(CDN.jszip);
   const zip = await window.JSZip.loadAsync(file);
@@ -345,6 +386,9 @@ export async function parseEpub(file, onProgress) {
     return url;
   }
 
+  const sheetCache = new Map();
+  const sheet = async (path) => { if (!sheetCache.has(path)) sheetCache.set(path, cssHints(await readEntry(path) || '')); return sheetCache.get(path); };
+
   const sections = [];
   const pathToSection = {};
   const DOMPurify = await getPurify();
@@ -376,6 +420,12 @@ export async function parseEpub(file, onProgress) {
       a.setAttribute('data-epub-target', (p ? resolve(p, dir) : path) + (hash ? '#' + hash : ''));
       a.removeAttribute('href');
     });
+    // a heading only the CSS makes is often a bare chapter number: leave the section title to the TOC then
+    const h = body.querySelector('h1, h2, h3, h4');
+    const hints = new Map();
+    for (const l of Array.from(doc.querySelectorAll('link'))) if (/stylesheet/i.test(l.getAttribute('rel') || '') && l.getAttribute('href')) for (const [k, v] of await sheet(resolve(l.getAttribute('href'), dir))) hints.set(k, Object.assign(hints.get(k) || {}, v));
+    for (const st of Array.from(doc.querySelectorAll('style'))) for (const [k, v] of cssHints(st.textContent)) hints.set(k, Object.assign(hints.get(k) || {}, v));
+    applyCssHints(body, hints);
     body.querySelectorAll('script, style, link, nav[hidden]').forEach(n => n.remove());
     // Direction and language live on <html> and <body>, which are dropped: move them onto the blocks. A chapter that
     // declares none follows its own text (right-to-left set in CSS only). The spine's page-progression-direction is
@@ -398,7 +448,6 @@ export async function parseEpub(file, onProgress) {
     const text = body.textContent.replace(/\s+/g, ' ').trim();
     const hasImg = /<img/i.test(clean);
     if (!text && !hasImg) continue;
-    const h = body.querySelector('h1, h2, h3, h4');
     const sec = { id: 's' + sections.length, title: h ? h.textContent.trim() : null, html: clean, path };
     pathToSection[path] = sec.id;
     sections.push(sec);
