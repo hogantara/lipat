@@ -439,6 +439,16 @@ body.listening.chrome-hidden .rd-tools-bottom { display: none; }
 .say-about { margin: -2px 2px 0; font-size: 14px; line-height: 1.45; color: var(--ink-2); }
 .say-pop .say-meter { margin: 0 2px; }
 .say-get { align-self: flex-start; }
+.say-kept { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-radius: 12px; background: var(--bg-2); }
+.say-kept-top { display: flex; align-items: center; gap: 8px; }
+.say-kept-title { display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0; margin: 0; font-size: 14px; font-weight: 600; }
+.say-kept-title .ph { font-size: 18px; color: var(--ink-2); }
+.say-kept-ready { flex: none; font-size: 14px; font-weight: 500; color: var(--accent-ink); font-variant-numeric: tabular-nums; }
+.say-kept-note { margin: 0; font-size: 13px; line-height: 1.45; color: var(--ink-2); }
+.say-kept-note:empty { display: none; }
+.say-kept-acts { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.say-kept-acts .btn { background: var(--card); }
+.say-kept-acts .btn.danger-text { background: transparent; margin-left: auto; }
 .say-pop .select { flex: 1; min-width: 0; text-overflow: ellipsis; }
 .say-pop output { width: 46px; flex: none; text-align: right; font-size: 14px; font-variant-numeric: tabular-nums; }
 .say-hint { margin: 0 2px; line-height: 1.45; }

@@ -1,9 +1,12 @@
-// The natural voice, page side. The speech worker (voice-worker.js) makes one sentence at a time, up to four minutes
-// ahead of the voice; the page plays them through one <audio> element. Chrome keeps an audio element playing with the
-// screen off and gives it lock-screen controls, which Android's built-in speech engine does not get.
+// The natural voice, page side. The speech worker (voice-worker.js) makes one sentence at a time, up to twenty minutes
+// ahead of the voice, and keeps each one on the device as a small Ogg Opus file; the page plays them through one
+// <audio> element. Chrome keeps an audio element playing with the screen off and gives it lock-screen controls, which
+// Android's built-in speech engine does not get. Sentences made before (prepared ahead, or heard already) come from
+// storage at once, without the model.
 //
 // Positions are ReadAloud's { si, k }. The host supplies the sentences and hears what happens:
-// { seg(pos), after(pos), lang(), voice(), steps(), speed(seconds, ms), onStart(pos), onEnd(), onChange(), onPause(), onFail(message) }
+// { seg(pos), after(pos), key(pos), book(), lang(), voice(), steps(), speed(seconds, ms), refill(), onStart(pos), onEnd(),
+//   onChange(), onPause(), onFail(message), onPrepared(m), onPrepDone() }
 
 export const NATURAL_MB = 145;
 const AHEAD_SECONDS = 1200;  // generated ahead of the voice: twenty minutes, so a device slower than the voice can get ahead
@@ -56,6 +59,7 @@ export class NaturalVoice {
       this.w = new Worker(new URL('./voice-worker.js', import.meta.url), { type: 'module' });
       this.w.onmessage = (e) => this._msg(e.data);
       this.w.onerror = (e) => this._msg({ t: 'failed', message: e.message || 'The voice could not start.' });
+      this.preparing = false;
     }
     return this.w;
   }
@@ -72,6 +76,7 @@ export class NaturalVoice {
       this._loading.catch(() => {});
       try { navigator.storage?.persist?.(); } catch {}
       this._worker().postMessage({ t: 'load' });
+      this._pump(); // stored sentences can play while it loads
     }
     return this._loading;
   }
@@ -81,9 +86,21 @@ export class NaturalVoice {
     if (this.w) { this.w.postMessage({ t: 'forget' }); }
     this.status = 'absent'; this._loading = null;
   }
+  // Make and keep these sentences ({ key, text, lang, voice, steps }) in the background, in order, skipping what is
+  // stored. Replaces the list before; an empty list stops. Needs the model loaded (load()).
+  prep(book, jobs) {
+    if (!jobs.length && !this.w) return;
+    this.preparing = jobs.length > 0;
+    this._worker().postMessage({ t: 'prep', book, jobs });
+  }
+  // Delete one book's prepared speech, or all of it (book null).
+  forgetAudio(book) {
+    if (this.w) this.w.postMessage({ t: 'forget-audio', book });
+    else return import('./voice-store.js').then(s => s.forgetAudio(book)).catch(() => {});
+  }
   // Free the model's memory; it stays stored.
   release() {
-    this.stop();
+    this.stop(); this.preparing = false;
     if (this.w) { this.w.terminate(); this.w = null; }
     if (this.status === 'ready' || this.status === 'preparing') this.status = 'stored';
     this._loading = null;
@@ -96,12 +113,14 @@ export class NaturalVoice {
       case 'ready': this.status = 'ready'; this.progress = 1; this._loaded?.(); this._pump(); break;
       case 'audio': this._made(m); return;
       case 'failed':
-        if (m.id != null) { this._made({ ...m, pcm: null }); return; }
-        this.status = 'failed'; this.error = m.message; this._loading = null; this._failed?.(new Error(m.message));
+        if (m.id != null) { this._made({ ...m, ogg: null, pcm: null }); return; }
+        this.status = 'failed'; this.error = m.message; this._loading = null; this.preparing = false; this._failed?.(new Error(m.message));
         this.host.onFail(m.message);
         break;
       case 'engine': this.gpu = m.gpu; this.threads = m.threads; return;
-      case 'forgotten': break;
+      case 'prepared': if (m.ms) this.host.speed(m.dur, m.ms); this.host.onPrepared?.(m); return;
+      case 'prep-done': case 'prep-unsupported': this.preparing = false; this.host.onPrepDone?.(); return;
+      case 'audio-forgotten': case 'forgotten': this.host.onPrepared?.(m); return;
     }
     this.host.onChange();
   }
@@ -115,14 +134,6 @@ export class NaturalVoice {
     this._clear();
     this.next = pos; this.waiting = true;
     this.host.onChange();
-    this._pump();
-  }
-  // Make speech from pos without playing it, so a later play(pos) starts at once.
-  prepare(pos) {
-    if (this.playing) return;
-    if (this.items.some(x => same(x.pos, pos))) { this._pump(); return; }
-    this._clear();
-    this.next = pos;
     this._pump();
   }
   pause() {
@@ -148,22 +159,25 @@ export class NaturalVoice {
     this.items = []; this.at = -1; this.next = null; this.pending = null; this.waiting = false;
   }
   _pump() {
-    if (this.pending || !this.next || this.status !== 'ready') return;
+    // the worker answers stored sentences while the model loads, and holds the rest until it has
+    if (this.pending || !this.next || !(this.status === 'ready' || this._loading)) return;
     if (!this.playing && document.hidden) return;
     const ahead = this.items.slice(this.at + 1).reduce((n, x) => n + x.dur, 0);
     if (ahead > AHEAD_SECONDS && !this.waiting) return;
     const pos = this.next, s = this.host.seg(pos);
     if (!s) { this.next = null; return; }
     this.pending = { id: ++this.reqId, pos, at: performance.now() };
-    this._worker().postMessage({ t: 'speak', id: this.reqId, text: s.text, lang: this.host.lang(), voice: this.host.voice(), steps: this.host.steps() });
+    this._worker().postMessage({ t: 'speak', id: this.reqId, key: this.host.key(pos), book: this.host.book(), text: s.text,
+      lang: this.host.lang(), voice: this.host.voice(), steps: this.host.steps() });
   }
   _made(m) {
     const p = this.pending;
     if (!p || p.id !== m.id) return; // made for a place the reader has left
     this.pending = null;
-    const dur = m.pcm ? m.pcm.length / m.sampleRate : 0;
-    if (m.pcm) this.host.speed(dur, m.ms);
-    this.items.push({ pos: p.pos, url: m.pcm ? URL.createObjectURL(wavBlob(m.pcm, m.sampleRate)) : null, dur });
+    const blob = m.ogg ? new Blob([m.ogg], { type: 'audio/ogg; codecs=opus' }) : m.pcm ? wavBlob(m.pcm, m.sampleRate) : null;
+    const dur = blob ? m.dur || (m.pcm ? m.pcm.length / m.sampleRate : 0) : 0;
+    if (blob && m.ms) this.host.speed(dur, m.ms); // made just now: how fast this device makes speech
+    this.items.push({ pos: p.pos, url: blob ? URL.createObjectURL(blob) : null, dur });
     this.next = this.host.after(p.pos);
     // waiting: go on once enough is ready (all of it at the start of a reading, so it starts at once)
     const ready = this.ready;

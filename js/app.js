@@ -5,7 +5,7 @@ import { Reader, EMOJIS, DEFAULT_PREFS, applyPrefs, isMobile } from './reader.js
 import { Drive, DriveError } from './drive.js';
 import { bookMarkdown, reactionMarkdown, indexMarkdown, allMarksMarkdown, safeName, REACTIONS } from './export.js';
 import { GOOGLE_CLIENT_ID, GOOGLE_API_KEY } from './config.js';
-export const BUILD = '2026-11-01.7';
+export const BUILD = '2026-11-01.8';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -124,6 +124,8 @@ async function removeBook(id) {
   const n = state.marks.filter(m => m.bookId === id).length;
   if (!confirm(`Remove “${b.title}” from the shelf?${n ? `\nThis also removes ${n} mark${n === 1 ? '' : 's'} here (the Drive file stays).` : ''}`)) return;
   await db.deleteBook(id);
+  // and the natural voice's audio prepared for it
+  import('./voice-store.js').then(v => v.forgetAudio(id)).catch(() => {});
   await loadAll();
   toast('Removed');
 }

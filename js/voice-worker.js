@@ -5,10 +5,16 @@
 // a sherpa-onnx conversion of huggingface.co/Supertone/supertonic-3). The parts are read as text and decoded here;
 // nothing downloaded is executed. ONNX Runtime comes from jsDelivr too, at a pinned version.
 //
-// Messages in:  { t: 'check' } { t: 'load' } { t: 'speak', id, text, lang, voice, steps } { t: 'forget' }
-// Messages out: { t: 'checked', cached } { t: 'progress', done, total } { t: 'preparing' } { t: 'ready' }
-//               { t: 'audio', id, pcm (Int16Array), sampleRate, ms } { t: 'failed', id?, message } { t: 'forgotten' }
+// Messages in:  check, load, speak { id, key, book, text, lang, voice, steps }, prep { book, jobs: [{ key, text, lang, voice, steps }] },
+//               forget-audio { book }, forget
+// Messages out: checked { cached }, progress { done, total }, preparing, ready, engine { gpu, threads },
+//               audio { id, ogg (Ogg Opus bytes) or pcm (Int16) + sampleRate, dur, ms?, cached? }, failed { id?, message },
+//               prepared { key, dur, ms } or { key, failed }, prep-done { book }, prep-unsupported, audio-forgotten, forgotten
+// Every sentence made is kept as a small Ogg Opus file (ogg.js, voice-store.js) under the key the page gives it, so
+// each one is made once and plays later without the model.
 import { Supertonic } from './supertonic.js';
+import { encodeOgg, opusSupported } from './ogg.js';
+import { getFile, putFile, fileKeys, getAudio, hasAudio, putAudio, touchBook, durations, evict, forgetAudio, forgetAll } from './voice-store.js';
 
 const ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
 const CDN = 'https://cdn.jsdelivr.net/npm/';
@@ -27,25 +33,17 @@ const FILES = {
 };
 const partUrl = (p) => { const [pkg, ...rest] = p.split('/'); return `${CDN}@3sln/donki-lle-voice-${pkg}@${VERSION}/${rest.join('/')}`; };
 
-// ------------------------------------------------------------ IndexedDB: one record per file
-let dbp = null;
-function idb() {
-  if (!dbp) dbp = new Promise((res, rej) => {
-    const r = indexedDB.open('lipat-voice', 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('files');
-    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
-  });
-  return dbp;
-}
-const tx = (mode, fn) => idb().then(db => new Promise((res, rej) => {
-  const t = db.transaction('files', mode), req = fn(t.objectStore('files'));
-  t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
-}));
+// ------------------------------------------------------------ storage (voice-store.js)
 const key = (f) => `${MODEL_ID}/${f}`;
-const getFile = (f) => tx('readonly', s => s.get(key(f)));
-const putFile = (f, buf) => tx('readwrite', s => s.put(buf, key(f)));
+const getModelFile = (f) => getFile(key(f));
+const putModelFile = (f, buf) => putFile(key(f), buf);
 async function cached() {
-  try { const keys = await tx('readonly', s => s.getAllKeys()); return Object.keys(FILES).every(f => keys.includes(key(f))); } catch { return false; }
+  try { const keys = await fileKeys(); return Object.keys(FILES).every(f => keys.includes(key(f))); } catch { return false; }
+}
+let stored = 0;
+async function keep(k, book, ogg, dur) {
+  await putAudio(k, book, ogg, dur);
+  if (++stored % 25 === 0) evict(book).catch(() => {});
 }
 
 // ------------------------------------------------------------ download
@@ -91,7 +89,7 @@ async function download(progress) {
   const tick = (n) => { done += n; progress(done, total); };
   // three parts at a time, files in order so the small ones finish first
   for (const [name, [size, hash, parts]] of Object.entries(FILES)) {
-    if (await getFile(name).catch(() => null)) { tick(parts.reduce((m, [, s]) => m + s, 0)); continue; }
+    if (await getModelFile(name).catch(() => null)) { tick(parts.reduce((m, [, s]) => m + s, 0)); continue; }
     const out = new Uint8Array(size);
     let at = 0;
     for (let i = 0; i < parts.length; i += 3) {
@@ -100,7 +98,7 @@ async function download(progress) {
     }
     if (at !== size) throw new Error(`${name}: ${at} bytes, expected ${size}`);
     if (await sha256(out) !== hash) throw new Error(`${name} did not match its checksum`);
-    await putFile(name, out.buffer);
+    await putModelFile(name, out.buffer);
   }
 }
 
@@ -118,7 +116,7 @@ async function load(progress) {
 
   const files = {};
   for (const name of Object.keys(FILES)) {
-    const buf = await getFile(name);
+    const buf = await getModelFile(name);
     if (!buf) throw new Error('missing ' + name);
     files[name] = name.endsWith('.onnx') ? new Uint8Array(buf) : name === 'tts.json' ? JSON.parse(new TextDecoder().decode(buf)) : buf;
   }
@@ -131,27 +129,91 @@ async function load(progress) {
 }
 
 const post = (m, transfer) => self.postMessage(m, transfer || []);
-let queue = Promise.resolve();
-self.onmessage = (ev) => {
+
+// ------------------------------------------------------------ the work
+// What the voice is waiting for comes first. Preparing ahead runs only when nothing has been asked for a moment, so it
+// never holds up the sentence the reader is about to hear by more than the one it is on.
+const speaks = [];                 // { id, key, book, text, lang, voice, steps }
+let prep = [], prepBook = null;    // { key, text, lang, voice, steps }, for prepBook
+let busy = false, askedAt = 0;
+const QUIET = 2000;
+async function make(text, lang, voice, steps) {
+  const t = performance.now(), { wav, sampleRate } = await tts.speak(text, lang, { voice, steps });
+  const ms = performance.now() - t, dur = wav.length / sampleRate;
+  let ogg = null;
+  if (opusSupported()) { try { ogg = (await encodeOgg(wav, sampleRate)).buffer; } catch { ogg = null; } }
+  return { wav, sampleRate, dur, ms, ogg };
+}
+// already made: answer from storage, with or without the model
+async function fromStore(m) {
+  if (!m.key) return false;
+  const hit = await getAudio(m.key).catch(() => null);
+  if (!hit) return false;
+  const [dur] = await durations([m.key]).catch(() => [0]);
+  touchBook(m.book);
+  post({ t: 'audio', id: m.id, ogg: hit, dur, cached: true }, [hit]);
+  return true;
+}
+async function speak(m) {
+  try {
+    if (await fromStore(m)) return;
+    const r = await make(m.text, m.lang, m.voice, m.steps);
+    if (r.ogg) {
+      if (m.key) await keep(m.key, m.book, r.ogg.slice(0), r.dur).catch(() => {});
+      post({ t: 'audio', id: m.id, ogg: r.ogg, dur: r.dur, ms: r.ms }, [r.ogg]);
+    } else {
+      const pcm = new Int16Array(r.wav.length);
+      for (let i = 0; i < r.wav.length; i++) pcm[i] = Math.max(-1, Math.min(1, r.wav[i])) * 32767;
+      post({ t: 'audio', id: m.id, pcm, sampleRate: r.sampleRate, dur: r.dur, ms: r.ms }, [pcm.buffer]);
+    }
+  } catch (e) { post({ t: 'failed', id: m.id, message: String(e && e.message || e) }); }
+}
+async function prepareOne(j) {
+  try {
+    if (await hasAudio(j.key)) return;
+    const r = await make(j.text, j.lang, j.voice, j.steps);
+    if (!r.ogg) { prep = []; post({ t: 'prep-unsupported' }); return; } // nothing to keep without an encoder
+    await keep(j.key, prepBook, r.ogg, r.dur);
+    post({ t: 'prepared', key: j.key, dur: r.dur, ms: r.ms });
+  } catch (e) { post({ t: 'prepared', key: j.key, failed: String(e && e.message || e) }); }
+}
+let quietT = 0;
+async function work() {
+  if (busy || !tts) return;
+  busy = true;
+  try {
+    while (tts && (speaks.length || prep.length)) {
+      if (speaks.length) { await speak(speaks.shift()); continue; }
+      const wait = askedAt + QUIET - Date.now();
+      if (wait > 0) { clearTimeout(quietT); quietT = setTimeout(work, wait); break; }
+      await prepareOne(prep.shift());
+      if (!prep.length) post({ t: 'prep-done', book: prepBook });
+    }
+  } finally { busy = false; }
+}
+
+self.onmessage = async (ev) => {
   const m = ev.data || {};
   if (m.t === 'check') cached().then(c => post({ t: 'checked', cached: c }));
   else if (m.t === 'load') {
     loading = loading || load((done, total) => post({ t: 'progress', done, total }))
-      .then(() => post({ t: 'ready' }))
+      .then(() => { post({ t: 'ready' }); work(); })
       .catch(e => { loading = null; post({ t: 'failed', message: String(e && e.message || e) }); });
   } else if (m.t === 'speak') {
-    // one sentence at a time, in order
-    queue = queue.then(async () => {
-      try {
-        const t = performance.now();
-        const { wav, sampleRate } = await tts.speak(m.text, m.lang, { voice: m.voice, steps: m.steps });
-        const pcm = new Int16Array(wav.length);
-        for (let i = 0; i < wav.length; i++) pcm[i] = Math.max(-1, Math.min(1, wav[i])) * 32767;
-        post({ t: 'audio', id: m.id, pcm, sampleRate, ms: performance.now() - t }, [pcm.buffer]);
-      } catch (e) { post({ t: 'failed', id: m.id, message: String(e && e.message || e) }); }
-    });
+    askedAt = Date.now();
+    // stored sentences play without waiting for the model, or for the one being made
+    if (!speaks.length && await fromStore(m).catch(() => false)) return;
+    speaks.push(m); work();
+  }
+  // a new list of sentences to prepare replaces the old one
+  else if (m.t === 'prep') { prep = m.jobs || []; prepBook = m.book; work(); }
+  else if (m.t === 'forget-audio') {
+    if (m.book == null || m.book === prepBook) prep = [];
+    await forgetAudio(m.book).catch(() => {});
+    post({ t: 'audio-forgotten', book: m.book });
   } else if (m.t === 'forget') {
-    tts = null; loading = null;
-    tx('readwrite', s => s.clear()).catch(() => {}).then(() => post({ t: 'forgotten' }));
+    tts = null; loading = null; prep = []; speaks.length = 0;
+    await forgetAll().catch(() => {});
+    post({ t: 'forgotten' });
   }
 };

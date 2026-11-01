@@ -56,10 +56,17 @@ Any other static HTTPS host works too, as long as its origin is added to the OAu
     below 5 it sounds hissy) from how fast the device is, and the voice settings say what it runs on
     and how fast. If the device can't keep up, the player says "Preparing the next part" with how far
     along it is, gathers about a minute of speech (15 seconds on a device that keeps up), and goes on
-    by itself: a rare wait instead of one every few sentences. Once it is on the device it also prepares
-    ahead whenever a book is open, from where you are, up to 20 minutes, even before you press play and
-    while paused (not while the screen is off and nothing plays). So on a slow device a few minutes of
-    reading first give a long stretch of listening without a stop.
+    by itself: a rare wait instead of one every few sentences.
+  - **Prepared and kept**: every sentence the natural voice makes is kept on the device as Ogg Opus
+    (WebCodecs, about 16 MB per hour of speech), so it is made once and plays later without the model,
+    with no pauses however slow the phone is, and after the app restarts. Once the voice is on the
+    device, an open book prepares half an hour ahead of where you are (or of the voice), even before you
+    press play. "Prepare 1 more hour" in the voice settings adds an hour. On the charger it prepares to
+    the end of the book, and on a phone keeps the screen on while it works, so a book left open
+    overnight is ready in the morning. On battery it waits while the screen is off and nothing plays.
+    The voice settings show how much is ready from your place and what it takes on the device. Remove
+    deletes a book's audio and stops preparing it; removing the book or the voice deletes it too. Past
+    1 GB the least recently used books' audio goes first.
   - **Device**: the system's own voices (Web Speech API). Instant and in every language the device speaks,
     but Android stops it when the screen turns off. Lipat picks the best installed voice for the book's
     language. Used automatically for languages the natural voice doesn't speak.
@@ -116,7 +123,9 @@ js/app.js             shelf, import, marks view, settings, Drive sync, PWA plumb
 js/reader.js          reading surface, marks, sheets/panels, search, PDF page mode
 js/speech.js          read aloud: text for the ear, voice choice, player, highlight, Media Session
 js/natural.js         natural voice, page side: works ahead, plays through one audio element
-js/voice-worker.js    natural voice, worker side: download, checksums, IndexedDB, ONNX Runtime
+js/voice-worker.js    natural voice, worker side: download, checksums, ONNX Runtime, making and keeping speech
+js/voice-store.js     natural voice storage (IndexedDB lipat-voice): the model and prepared audio
+js/ogg.js             speech to Ogg Opus with the browser's WebCodecs encoder
 js/supertonic.js      Supertonic 3 inference (port of the reference web helper)
 js/formats.js         format detection + parsers (PDF reflow, EPUB, DOCX, MD, HTML, TXT)
 js/export.js          Markdown builders (book files, reaction files, index, download)

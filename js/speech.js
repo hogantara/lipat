@@ -26,6 +26,7 @@
 import { db } from './db.js';
 import { NaturalVoice, NATURAL_MB } from './natural.js';
 import { SUPERTONIC_LANGS, SUPERTONIC_VOICES } from './supertonic.js';
+import { usage, durations } from './voice-store.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -35,6 +36,14 @@ const same = (a, b) => !!a && !!b && a.si === b.si && a.k === b.k;
 const frame = () => new Promise(r => { requestAnimationFrame(() => r()); setTimeout(r, 60); });
 
 const AHEAD = 24;                                   // utterances queued in the engine ahead of the voice
+// Prepared ahead with the natural voice and kept on the device: half an hour ahead of the reader while the book is open,
+// an hour more for each "Prepare more", the rest of the book while charging.
+const PREP_AHEAD = 30 * 60, PREP_MORE = 60 * 60;
+const CHARS_PER_SEC = 14;                           // to plan how far half an hour reaches; what is ready is measured
+const hash = (t) => { let h = 0x811c9dc5; for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 16777619); return (h >>> 0).toString(36); };
+const fmtMin = (sec) => { const m = Math.round(sec / 60), h = Math.floor(m / 60); return !m ? 'under a minute' : h ? `${h} h${m % 60 ? ` ${m % 60} min` : ''}` : `${m} min`; };
+const PHONE = () => matchMedia('(pointer: coarse)').matches; // a computer without a battery reports itself charging
+const fmtMB = (b) => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.max(b ? 1 : 0, Math.round(b / 1e6))} MB`;
 const HL = 'lipat-say', HL_WORD = 'lipat-say-word'; // CSS custom highlight names (see app.css)
 const IOS = typeof navigator !== 'undefined' && (/iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1));
 
@@ -352,6 +361,8 @@ export class ReadAloud {
     this.badVoices = new Set();    // network voices that failed this session
     this.following = true;         // the page keeps the voice in view until the reader scrolls away from it
     this.errors = 0;
+    this.more = new Map();         // book id -> seconds more to prepare, from "Prepare more"
+    this.charging = false;         // on the charger: prepare to the end of the book
     this.bar = $('#say-bar'); this.pop = $('#say-pop');
     // voices load late on most platforms; ask early so the first tap can speak at once
     this.voices = speechSynthesis.getVoices();
@@ -362,20 +373,31 @@ export class ReadAloud {
       this._syncRate();
     });
     this.nat = new NaturalVoice({
-      seg: (pos) => this._seg(pos), after: (pos) => this._after(pos),
+      seg: (pos) => this._seg(pos), after: (pos) => this._after(pos), key: (pos) => this._key(pos), book: () => this.r.book?.id,
       lang: () => baseOf(this.lang), voice: () => this.prefs.natural, steps: () => this.prefs.steps,
       speed: (sec, ms) => this._tune(sec, ms),
       // slower than the voice: gather a minute before going on, so the waits are rare
       refill: () => this.speedSeen && this.speedSeen < this.prefs.rate * 1.05 ? 60 : 15,
-      onStart: (pos) => { if (this.state === 'playing' && !same(pos, this.cur)) this._setCurrent(pos); },
+      onStart: (pos) => {
+        if (this.state === 'playing' && !same(pos, this.cur)) this._setCurrent(pos);
+        if (Date.now() - (this._plannedAt || 0) > 5 * 60000) this.prepareSoon(); // keep the plan ahead of the voice
+      },
       onEnd: () => this._finish(),
       onChange: () => { this._ui(); if (!this.pop.hidden) this._renderPop(); },
       onPause: () => { if (this.state === 'playing') { this.state = 'paused'; this._ui(); } },
+      onPrepared: () => this._keptSoon(),
+      onPrepDone: () => { this._lock(false); this._keptSoon(); },
       onFail: (msg) => { if (this.engine === 'natural' && this.state !== 'off') { this.pause(); this.r.toast("The natural voice didn't load. Check your connection and try again.", { label: 'Details', fn: () => this.r.toast(String(msg).slice(0, 160)) }); } },
     });
     // a mark or search hit wraps text under the highlight: point the highlight at the new nodes
     this.observer = new MutationObserver(() => { if (this.state !== 'off') this._paint(); });
     addEventListener('pagehide', () => speechSynthesis.cancel());
+    // hidden on battery, preparing waits; it goes on when the book shows again, or on the charger
+    document.addEventListener('visibilitychange', () => { if (this.r.book) this.prepareSoon(document.hidden ? 0 : 1000); });
+    navigator.getBattery?.().then(b => {
+      const on = () => { if (this.charging === b.charging) return; this.charging = b.charging; if (this.r.book) this.prepareSoon(500); this._keptSoon(); };
+      b.addEventListener('chargingchange', on); on();
+    }).catch(() => {});
     $$('[data-act="listen"]', reader.view).forEach(b => { b.hidden = false; });
     // a finger or wheel on the page: whatever scrolls next is the reader's doing, not the page following the voice
     const user = () => { this._userAt = Date.now(); };
@@ -394,8 +416,22 @@ export class ReadAloud {
     $('#say-get').onclick = () => this._getNatural();
     // the first-time choice is kept only once the reader starts with it
     $('#say-start').onclick = () => { this.prefs.engine = this._chosen || 'natural'; this._save(); this.closePop(); this.play(); };
+    $('#say-more').onclick = () => {
+      const book = this.r.book; if (!book) return;
+      if (book.prepOff) { book.prepOff = false; db.updateBook(book.id, { prepOff: false }); }
+      else this.more.set(book.id, (this.more.get(book.id) || 0) + PREP_MORE);
+      this.prepareSoon(0); this._kept();
+    };
+    $('#say-kept-remove').onclick = async () => {
+      const book = this.r.book; if (!book) return;
+      if (!confirm('Remove the audio prepared for this book? It stops preparing until you ask again.')) return;
+      book.prepOff = true; db.updateBook(book.id, { prepOff: true }); this.more.delete(book.id);
+      this.nat.prep(book.id, []); this._lock(false);
+      await this.nat.forgetAudio(book.id);
+      setTimeout(() => this._kept(), 300);
+    };
     $('#say-remove').onclick = () => {
-      if (!confirm(`Remove the natural voice from this device? Getting it back is a ${NATURAL_MB} MB download.`)) return;
+      if (!confirm(`Remove the natural voice and all prepared audio from this device? Getting the voice back is a ${NATURAL_MB} MB download.`)) return;
       if (this.engine === 'natural') this.stop();
       this.nat.forget(); this._renderPop();
     };
@@ -436,6 +472,7 @@ export class ReadAloud {
     if (natural && resume && pos === this.cur && this.nat.canResume(pos)) { this.state = 'playing'; this.nat.resume(); this._ui(); return; }
     this._playFrom(pos, true);
     if (natural && this.nat.status !== 'ready') this.nat.load().catch(() => {});
+    if (natural) this.prepareSoon(3000);
   }
   pause() {
     if (this.state !== 'playing') return;
@@ -455,21 +492,49 @@ export class ReadAloud {
   }
   // a new book: forget the old one's sentences and language
   reset() { this.stop(); this.segs.clear(); this.key = null; this.detected = null; this.metaSid = null; }
-  // the book closed: free the natural voice's memory (it stays on the device)
-  release() { clearTimeout(this._pt); this.nat.release(); }
-  // Prepare ahead: with the natural voice chosen and on the device, make speech from where the reader is whenever the
-  // book is open, so listening later starts at once and doesn't wait on a slow device. Never downloads unasked.
+  // the book closed: free the natural voice's memory (it and the prepared audio stay on the device)
+  release() { clearTimeout(this._pt); this._lock(false); this.nat.release(); }
+  // Prepare ahead: with the natural voice chosen and on the device, make speech from where the reader is, or from the
+  // voice, whenever the book is open, and keep it on the device. Listening then plays what is stored, without pauses,
+  // however slow the phone is. Half an hour ahead on battery, and only while the book shows or plays; the rest of the
+  // book on the charger. Never downloads the voice unasked.
   prepareSoon(ms = 1500) { clearTimeout(this._pt); this._pt = setTimeout(() => this._prepare(), ms); }
   async _prepare() {
     await this.ready;
-    const r = this.r;
-    if (!r.book || this.state !== 'off' || r.pageMode || this.prefs.engine !== 'natural' || !this._naturalSpeaks()) return;
-    if (!(await this.nat.check()) || this.nat.status === 'failed' || this.state !== 'off' || !r.book) return;
+    const r = this.r, book = r.book;
+    const idle = () => { this.nat.prep(book?.id, []); this._lock(false); };
+    if (!book || book.prepOff || r.pageMode || this.prefs.engine !== 'natural' || !this._naturalSpeaks()) return idle();
+    if (document.hidden && this.state !== 'playing' && !this.charging) return idle();
+    if (!(await this.nat.check()) || this.nat.status === 'failed' || r.book !== book) return;
     this._setup();
-    const pos = this._visiblePos();
-    if (!pos) return;
-    this.nat.prepare(pos);
+    const from = this.state !== 'off' && this.cur ? this.cur : this._visiblePos();
+    if (!from) return;
+    const budget = this.charging ? Infinity : PREP_AHEAD + (this.more.get(book.id) || 0);
+    const lang = baseOf(this.lang), voice = this.prefs.natural, steps = this.prefs.steps, jobs = [];
+    for (let p = from, sec = 0; p && sec < budget; p = this._after(p)) {
+      const s = this._seg(p);
+      jobs.push({ key: this._key(p), text: s.text, lang, voice, steps });
+      sec += s.text.length / CHARS_PER_SEC;
+    }
+    this._plannedAt = Date.now();
     this.nat.load().catch(() => {});
+    this.nat.prep(book.id, jobs);
+    // on the charger the phone's screen stays on while it works, so it can be left with the book open overnight
+    this._lock(this.charging && !document.hidden && PHONE());
+    this._keptSoon();
+  }
+  // Each sentence's audio is kept under the book, language, speaker, place and words, so an edit or another
+  // speaker makes it again.
+  _key(pos) {
+    const s = this._seg(pos);
+    return s ? `${this.r.book.id}|${baseOf(this.lang)}|${this.prefs.natural}|${s.sid}|${s.start}|${hash(s.text)}` : null;
+  }
+  async _lock(on) {
+    if (!on) { const l = this._wl; this._wl = null; l?.release().catch(() => {}); return; }
+    if (this._wl || this._wlAsk || !navigator.wakeLock) return;
+    this._wlAsk = true;
+    try { this._wl = await navigator.wakeLock.request('screen'); this._wl.addEventListener('release', () => { this._wl = null; }); } catch {}
+    this._wlAsk = false;
   }
   // Back: the start of this sentence, or the one before if this one only just began. Paused, it only moves.
   skip(dir) {
@@ -545,8 +610,7 @@ export class ReadAloud {
   _perf() {
     const n = this.nat, on = n.gpu ? "Runs on this device's graphics chip." : n.threads > 1 ? `Runs on ${n.threads} processor cores.` : n.threads ? 'Runs on one processor core.' : '';
     const speed = this.speedSeen ? ` Makes speech ${this.speedSeen.toFixed(1)} times as fast as it reads.` : '';
-    const m = Math.floor(n.ready / 60), ahead = m >= 1 ? ` ${m} ${m === 1 ? 'minute is' : 'minutes are'} ready ahead.` : '';
-    return on + speed + ahead;
+    return on + speed;
   }
 
   // ---------------------------------------------------------- language and voice
@@ -840,10 +904,10 @@ export class ReadAloud {
   _statusText() {
     const n = this.engine === 'natural' && this.nat;
     if (n && n.status === 'downloading') return `Downloading the natural voice, ${Math.floor(n.progress * 100)}%`;
-    if (n && this.state === 'playing' && n.status !== 'ready') return n.status === 'failed' ? "The natural voice didn't load" : 'Getting the natural voice ready';
+    if (n && this.state === 'playing' && n.status === 'failed') return "The natural voice didn't load";
     if (this.ended) return 'End of the book';
     if (this.state === 'paused') return 'Paused';
-    if (n && n.waiting) return n.at < 0 ? 'Preparing the first sentence' : `Preparing the next part, ${Math.min(99, Math.floor(n.ready / n.target * 100))}%`;
+    if (n && n.waiting) return n.status !== 'ready' ? 'Getting the natural voice ready' : n.at < 0 ? 'Preparing the first sentence' : `Preparing the next part, ${Math.min(99, Math.floor(n.ready / n.target * 100))}%`;
     return 'Reading';
   }
   _ui() {
@@ -854,7 +918,7 @@ export class ReadAloud {
     pb.innerHTML = `<i class="ph-fill ph-${playing ? 'pause' : 'play'}" aria-hidden="true"></i>`;
     pb.setAttribute('aria-label', playing ? 'Pause' : 'Play'); pb.title = `${playing ? 'Pause' : 'Play'} (P)`;
     if (on) {
-      const n = this.engine === 'natural' && this.nat, busy = n && playing && (n.status !== 'ready' || n.waiting);
+      const n = this.engine === 'natural' && this.nat, busy = n && playing && (n.waiting || n.status === 'downloading');
       $('.say-state', this.bar).textContent = this._statusText();
       const sec = this.cur && this.r.book.sections[this.cur.si];
       $('.say-where', this.bar).textContent = sec ? (this.r.book.sectionTitles?.[sec.id] || sec.title || '').trim() : '';
@@ -946,5 +1010,46 @@ export class ReadAloud {
     ls.closest('.row').hidden = first;
     $('#say-rate').closest('.row').hidden = first;
     this._syncRate();
+    this._kept();
+  }
+  _keptSoon() { if (this.pop.hidden || this._kt) return; this._kt = setTimeout(() => { this._kt = 0; this._kept(); }, 2000); }
+  // Prepared for this book: how much is ready from the reader's place, what it takes on the device, and what goes on.
+  async _kept() {
+    const el = $('#say-kept'), book = this.r.book, n = this.nat;
+    const show = !!book && !this.pop.hidden && this.prefs.engine === 'natural' && this._naturalSpeaks() && ['stored', 'ready', 'preparing'].includes(n.status);
+    el.hidden = !show;
+    if (!show) return;
+    const more = $('#say-more'), note = $('#say-kept-note'), remove = $('#say-kept-remove');
+    if (book.prepOff) {
+      $('#say-kept-ready').textContent = 'Off';
+      note.textContent = 'Not preparing this book. What you listen to is still kept.';
+      $('span', more).textContent = 'Prepare ahead'; more.hidden = false;
+    } else {
+      $('span', more).textContent = 'Prepare 1 more hour';
+      more.hidden = this.charging;
+      const want = PREP_AHEAD + (this.more.get(book.id) || 0);
+      note.textContent = this.charging
+        ? `Charging, so it prepares to the end of the book.${n.preparing && PHONE() ? ' The screen stays on while it works.' : ''}`
+        : `Keeps ${fmtMin(want)} ready ahead while the book is open. On the charger it prepares to the end of the book.`;
+    }
+    // stored sentences from the reader's place, in order, up to the first one missing
+    this._setup();
+    const from = this.state !== 'off' && this.cur ? this.cur : this._visiblePos();
+    let sec = 0;
+    try {
+      for (let p = from, chunks = 0; p && chunks < 40; chunks++) {
+        const ps = [];
+        for (; p && ps.length < 300; p = this._after(p)) ps.push(p);
+        const d = await durations(ps.map(q => this._key(q)));
+        const gap = d.indexOf(0);
+        sec += (gap < 0 ? d : d.slice(0, gap)).reduce((a, b) => a + b, 0);
+        if (gap >= 0) break;
+      }
+      const u = await usage(book.id);
+      if (this.r.book !== book) return;
+      $('#say-kept-ready').textContent = book.prepOff ? 'Off' : sec >= 60 ? `${fmtMin(sec)} ready` : n.preparing ? 'Preparing' : 'None ready';
+      $('#say-kept-size').textContent = u.book ? `${fmtMin(u.seconds).replace(/^u/, 'U')} stored for this book, ${fmtMB(u.book)}.${u.bytes > u.book ? ` ${fmtMB(u.bytes)} for all books.` : ''}` : '';
+      remove.hidden = !u.book;
+    } catch { remove.hidden = true; }
   }
 }
