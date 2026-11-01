@@ -109,9 +109,7 @@ let tts = null, loading = null;
 async function load(progress) {
   if (!(await cached())) await download(progress);
   post({ t: 'preparing' });
-  // a graphics chip, if the browser offers one to workers: then the bigger build that can use it
-  const gpu = !!self.navigator?.gpu && await navigator.gpu.requestAdapter().then(a => !!a, () => false);
-  const ort = await import(ORT + (gpu ? 'ort.webgpu.min.mjs' : 'ort.wasm.min.mjs'));
+  const ort = await import(ORT + 'ort.wasm.min.mjs');
   ort.env.wasm.wasmPaths = ORT;
   ort.env.logLevel = 'error'; // not the warnings about which nodes run where
   // Threads need shared memory, which needs an isolated page (sw.js asks for it). Half the cores, at most four:
@@ -127,22 +125,9 @@ async function load(progress) {
   const cpu = { executionProviders: ['wasm'], graphOptimizationLevel: 'all', logSeverityLevel: 3 };
   tts = await Supertonic.create(ort, files, cpu);
   await tts.speak('Ready.', 'en', { steps: 2 }); // the first run compiles kernels; do it before the reader waits on it
-  // The denoising estimator is nine tenths of the work. On a graphics chip it can be several times faster, or slower
-  // (a weak chip, a software one): time a sentence both ways and keep the faster. The rest stays on the processor.
-  let onGpu = false;
-  if (gpu) {
-    try {
-      const est = await ort.InferenceSession.create(files['vector_estimator.onnx'], { executionProviders: ['webgpu', 'wasm'], graphOptimizationLevel: 'all', logSeverityLevel: 3 });
-      const time = async () => { const t = performance.now(); await tts.speak('The voice is getting ready to read this book.', 'en', { steps: 5 }); return performance.now() - t; };
-      const onCpu = await time(), cpuEst = tts.est;
-      tts.est = est;
-      await tts.speak('Ready.', 'en', { steps: 2 });
-      const withGpu = await time();
-      onGpu = withGpu < onCpu * 0.9;
-      if (onGpu) cpuEst.release?.(); else { tts.est = cpuEst; est.release?.(); }
-    } catch (e) { onGpu = false; }
-  }
-  post({ t: 'engine', gpu: onGpu, threads: ort.env.wasm.numThreads });
+  // The graphics chip (WebGPU) was tried here and is left out: on a Galaxy S23 its extra 21 MB build and shader
+  // compiling kept the voice from starting at all.
+  post({ t: 'engine', gpu: false, threads: ort.env.wasm.numThreads });
 }
 
 const post = (m, transfer) => self.postMessage(m, transfer || []);
