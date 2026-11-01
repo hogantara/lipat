@@ -389,10 +389,10 @@ body[data-theme="night"] .rd-pages canvas { filter: invert(.9) hue-rotate(180deg
 .search-results li button b { background: rgba(var(--hl-base), .6); font-weight: 500; border-radius: 2px; }
 .search-results li button small { display: block; font-family: var(--font-ui); color: var(--ink-3); font-size: 11px; margin-bottom: 2px; }
 
-.type-pop { gap: 12px; z-index: 16; }
-.type-pop .row { display: flex; align-items: center; gap: 8px; }
-.type-pop .lbl { width: 62px; font-size: 13px; color: var(--ink-2); flex: none; }
-.type-pop input[type=range] { flex: 1; accent-color: var(--accent); height: 30px; }
+.type-pop, .say-pop { gap: 12px; z-index: 16; }
+.type-pop .row, .say-pop .row { display: flex; align-items: center; gap: 8px; }
+.type-pop .lbl, .say-pop .lbl { width: 62px; font-size: 13px; color: var(--ink-2); flex: none; }
+.type-pop input[type=range], .say-pop input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); height: 30px; }
 .step { width: 40px; height: 40px; border-radius: var(--r); font-family: var(--font-serif); font-size: 16px; display: grid; place-items: center; flex: none; }
 .step:hover { background: var(--bg-2); }
 .step.sm { font-size: 13px; } .step.lg { font-size: 21px; }
@@ -403,6 +403,33 @@ body[data-theme="night"] .rd-pages canvas { filter: invert(.9) hue-rotate(180deg
 .seg.themes button { display: grid; place-items: center; }
 .seg.themes i { width: 22px; height: 22px; border-radius: 50%; box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 22%, transparent); display: block; }
 .seg.themes button.is-active i { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 22%, transparent), 0 0 0 2px var(--accent); }
+
+/* read aloud. The player floats above the bottom bar and drops to the bottom edge when the bars hide. */
+.say-bar { position: absolute; left: 12px; right: 12px; bottom: calc(var(--sab) + 112px); max-width: 420px; margin: 0 auto; z-index: 12; display: flex; align-items: center; gap: 2px; padding: 5px; background: var(--card); border: 1px solid var(--line); border-radius: var(--r-m); box-shadow: var(--shadow); transition: bottom .3s var(--ease); animation: pop .18s var(--ease); }
+body.chrome-hidden .say-bar { bottom: calc(var(--sab) + 12px); }
+.say-bar .icon-btn { flex: none; }
+.say-play { width: 52px; height: 44px; flex: none; display: grid; place-items: center; border-radius: var(--r); background: var(--accent); color: var(--on-accent); transition: background .15s, transform .12s var(--ease); }
+.say-play:hover { background: var(--accent-ink); }
+.say-play:active { transform: scale(.96); }
+.say-play .ph-fill { font-size: 22px; }
+.say-rate { margin-left: auto; min-width: 58px; height: 44px; padding: 0 10px; border-radius: var(--r); font-size: 14px; font-weight: 500; color: var(--ink-2); font-variant-numeric: tabular-nums; transition: background .15s, color .15s; }
+.say-rate:hover { background: var(--bg-2); color: var(--ink); }
+.say-here { position: absolute; left: 0; right: 0; width: max-content; margin: 0 auto; bottom: calc(var(--sab) + 176px); z-index: 12; display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 8px 14px; border-radius: var(--r); background: var(--card); border: 1px solid var(--line); box-shadow: var(--shadow); color: var(--accent-ink); font-size: 14px; font-weight: 500; transition: bottom .3s var(--ease); animation: pop .18s var(--ease); }
+.say-here .ph-fill { font-size: 16px; }
+body.chrome-hidden .say-here { bottom: calc(var(--sab) + 76px); }
+.say-pop .select { flex: 1; min-width: 0; text-overflow: ellipsis; }
+.say-pop output { width: 46px; flex: none; text-align: right; font-size: 14px; font-variant-numeric: tabular-nums; }
+.say-hint { margin: 0; line-height: 1.45; }
+/* the sentence being read, and the word when the voice reports words */
+.rd-content ::highlight(lipat-say) { background-color: rgba(31,107,71,.13); }
+.rd-content ::highlight(lipat-say-word) { background-color: rgba(31,107,71,.3); }
+body[data-theme="night"] .rd-content ::highlight(lipat-say) { background-color: rgba(79,184,127,.16); }
+body[data-theme="night"] .rd-content ::highlight(lipat-say-word) { background-color: rgba(79,184,127,.36); }
+body.listening .zoom-ctl { bottom: calc(var(--sab) + 176px); }
+@media (max-width: 759px) {
+  body.listening #view-reader:not([hidden]) ~ .toast { bottom: calc(var(--sab) + 176px); }
+  body.listening.chrome-hidden #view-reader:not([hidden]) ~ .toast { bottom: calc(var(--sab) + 76px); }
+}
 
 .rd-loading { position: absolute; inset: 0; display: grid; place-items: center; align-content: center; gap: 12px; background: var(--bg); z-index: 30; color: var(--ink-2); font-size: 14px; }
 /* original layout loading: under the bars, so Back stays in reach */
@@ -459,7 +486,14 @@ body[data-theme="night"] .rd-pages canvas { filter: invert(.9) hue-rotate(180deg
   @keyframes slide { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: none; } }
   .panel-tabs { padding: 0 0 6px; }
   .type-pop { top: 56px; right: 14px; width: 330px; transform-origin: top right; gap: 10px; }
-  .type-pop .lbl { width: 58px; }
+  .type-pop .lbl, .say-pop .lbl { width: 58px; }
+  .say-bar { bottom: 66px; }
+  body.chrome-hidden .say-bar { bottom: 16px; }
+  .say-here { bottom: 130px; }
+  body.chrome-hidden .say-here { bottom: 80px; }
+  body.listening #view-reader:not([hidden]) ~ .toast { bottom: 130px; }
+  body.listening .zoom-ctl { bottom: 128px; }
+  .say-pop { left: calc(50% - 180px); bottom: 126px; width: 360px; gap: 10px; }
   .seg button { padding: 5px 6px; font-size: 13px; }
   .step { width: 32px; height: 32px; }
   .mark-editor { width: min(420px, calc(100vw - 32px)); }
