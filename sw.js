@@ -1,5 +1,5 @@
 // Lipat service worker: offline app shell, cached libraries, "Share to Lipat" inbox.
-const VERSION = 'lipat-v18';
+const VERSION = 'lipat-v19';
 const SHELL = ['./', './index.html', './css/app.css', './js/app.js', './js/reader.js', './js/formats.js', './js/db.js', './js/config.js', './js/drive.js', './js/export.js', './js/speech.js', './js/natural.js', './js/supertonic.js', './js/voice-worker.js', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png',
   './img/doodles/shelf-ink.webp', './img/doodles/shelf-accent.webp', './img/doodles/shelf-tone.webp', './img/doodles/marks-ink.webp', './img/doodles/marks-accent.webp', './img/doodles/marks-tone.webp'];
 const INBOX = 'lipat-inbox';
@@ -11,6 +11,15 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION && k !== INBOX).map(k => caches.delete(k)))).then(() => self.clients.claim()));
 });
+
+// The page asks to be isolated (Document-Isolation-Policy), which GitHub Pages can't send as a header: then the natural
+// voice may use several cores. Unlike COOP and COEP it leaves Google sign-in popups working. Browsers without it ignore it.
+function isolate(r) {
+  if (!r || !r.ok || r.type === 'opaque' || r.redirected) return r;
+  const h = new Headers(r.headers);
+  h.set('Document-Isolation-Policy', 'isolate-and-credentialless');
+  return new Response(r.body, { status: r.status, statusText: r.statusText, headers: h });
+}
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
@@ -33,10 +42,11 @@ self.addEventListener('fetch', (e) => {
   // no-cache revalidates past the HTTP cache (GitHub Pages sends max-age=600).
   const sameOrigin = url.origin === self.location.origin;
   if (sameOrigin) {
-    const key = e.request.mode === 'navigate' ? './index.html' : e.request;
+    const nav = e.request.mode === 'navigate', key = nav ? './index.html' : e.request;
     e.respondWith(caches.open(VERSION).then(c => fetch(e.request, { cache: 'no-cache' })
       .then(r => { if (r.ok) c.put(key, r.clone()); return r; })
-      .catch(async () => (await c.match(key)) || Response.error())));
+      .catch(async () => (await c.match(key)) || Response.error()))
+      .then(r => nav ? isolate(r) : r));
     return;
   }
   // Libraries: versioned URLs, so cache first. ONNX Runtime too (the natural voice); the voice model itself is kept
@@ -45,7 +55,14 @@ self.addEventListener('fetch', (e) => {
     e.respondWith(caches.open(VERSION).then(async (c) => {
       const cached = await c.match(e.request);
       if (cached) return cached;
-      const r = await fetch(e.request).catch(() => null);
+      // As an anonymous CORS request, answered with Cross-Origin-Resource-Policy: an isolated page (see isolate)
+      // refuses a service worker's answer to its scripts and styles without it.
+      let r = await fetch(e.request.url, { mode: 'cors', credentials: 'omit' }).catch(() => null);
+      if (r && r.ok) {
+        const h = new Headers(r.headers);
+        h.set('Cross-Origin-Resource-Policy', 'cross-origin');
+        r = new Response(await r.blob(), { status: r.status, statusText: r.statusText, headers: h });
+      } else r = await fetch(e.request).catch(() => null);
       if (r && r.ok) c.put(e.request, r.clone());
       return r || Response.error();
     }));

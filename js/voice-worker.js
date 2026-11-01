@@ -111,7 +111,10 @@ async function load(progress) {
   post({ t: 'preparing' });
   const ort = await import(ORT + 'ort.wasm.min.mjs');
   ort.env.wasm.wasmPaths = ORT;
-  ort.env.wasm.numThreads = 1; // GitHub Pages can't be cross-origin isolated, so no shared memory for threads
+  // Threads need shared memory, which needs an isolated page (sw.js asks for it). Half the cores, at most four:
+  // on a phone the other half are slow cores that hold the fast ones back.
+  ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, Math.min(4, Math.floor((navigator.hardwareConcurrency || 2) / 2))) : 1;
+  post({ t: 'threads', n: ort.env.wasm.numThreads });
   const files = {};
   for (const name of Object.keys(FILES)) {
     const buf = await getFile(name);
