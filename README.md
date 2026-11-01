@@ -54,8 +54,9 @@ Any other static HTTPS host works too, as long as its origin is added to the OAu
     voice, uses up to four cores where the browser supports Document-Isolation-Policy (Chrome 137 and
     later; the service worker asks for it). It picks its quality (denoising steps, 5 to 8;
     below 5 it sounds hissy) from how fast the device is, and the voice settings say what it runs on
-    and how fast. If the device can't keep up, the player says "Preparing the next sentence", waits
-    until about 15 seconds are ready, and goes on by itself.
+    and how fast. If the device can't keep up, the player says "Preparing the next part" with how far
+    along it is, gathers about a minute of speech (15 seconds on a device that keeps up), and goes on
+    by itself: a rare wait instead of one every few sentences.
   - **Device**: the system's own voices (Web Speech API). Instant and in every language the device speaks,
     but Android stops it when the screen turns off. Lipat picks the best installed voice for the book's
     language. Used automatically for languages the natural voice doesn't speak.
