@@ -356,7 +356,11 @@ export class ReadAloud {
     // voices load late on most platforms; ask early so the first tap can speak at once
     this.voices = speechSynthesis.getVoices();
     onVoices(() => { this.voices = speechSynthesis.getVoices(); if (!this.pop.hidden) this._renderPop(); });
-    this.ready = db.getSetting('listen', null).then(p => { if (p) this.prefs = { ...this.prefs, ...p, voices: { ...(p.voices || {}) } }; this._syncRate(); });
+    this.ready = db.getSetting('listen', null).then(p => {
+      if (p) this.prefs = { ...this.prefs, ...p, voices: { ...(p.voices || {}) } };
+      this.prefs.steps = clamp(this.prefs.steps || 6, 5, 8); // older builds went down to 3, which sounds broken
+      this._syncRate();
+    });
     this.nat = new NaturalVoice({
       seg: (pos) => this._seg(pos), after: (pos) => this._after(pos),
       lang: () => baseOf(this.lang), voice: () => this.prefs.natural, steps: () => this.prefs.steps,
@@ -511,12 +515,20 @@ export class ReadAloud {
   _tune(sec, ms) {
     const rtf = sec * 1000 / ms, need = this.prefs.rate * 1.25;
     this.rtf = this.rtf ? this.rtf * 0.6 + rtf * 0.4 : rtf;
+    this.speedSeen = this.rtf;
     let s = this.prefs.steps;
-    if (this.rtf < need && s > 3) s--;
+    // below 5 steps the voice turns hissy and broken: never go there
+    if (this.rtf < need && s > 5) s--;
     else if (this.rtf > need * 2 && s < 8) s++;
     if (s !== this.prefs.steps) { this.prefs.steps = s; this.rtf = null; this._save(); }
   }
   _save() { db.setSetting('listen', this.prefs); }
+  // what the natural voice runs on and how it keeps up, for the voice settings
+  _perf() {
+    const n = this.nat, on = n.gpu ? "Runs on this device's graphics chip." : n.threads > 1 ? `Runs on ${n.threads} processor cores.` : n.threads ? 'Runs on one processor core.' : '';
+    const speed = this.speedSeen ? ` Makes speech ${this.speedSeen.toFixed(1)} times as fast as it reads.` : '';
+    return on + speed;
+  }
 
   // ---------------------------------------------------------- language and voice
   // The book's language: what its blocks declare, unless the text clearly says otherwise.
@@ -866,6 +878,7 @@ export class ReadAloud {
       : !speaks ? `The natural voice doesn't speak ${langName(base)} yet. This book uses the device voice.`
       : n.status === 'downloading' ? `Downloading, ${Math.round(n.progress * NATURAL_MB)} of ${NATURAL_MB} MB. You can keep reading.`
       : n.status === 'failed' ? "The download didn't finish. Check your connection and try again."
+      : n.status === 'ready' ? `Sounds like a person and keeps reading with the screen off. Stored on this device. ${this._perf()}`.trim()
       : has ? 'Sounds like a person and keeps reading with the screen off. Stored on this device.'
       : `Sounds like a person and keeps reading with the screen off. A one-time ${NATURAL_MB} MB download.`;
     $('#say-about').textContent = about;

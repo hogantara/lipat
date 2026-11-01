@@ -96,7 +96,7 @@ export class NaturalVoice {
         this.status = 'failed'; this.error = m.message; this._loading = null; this._failed?.(new Error(m.message));
         this.host.onFail(m.message);
         break;
-      case 'threads': this.threads = m.n; return;
+      case 'engine': this.gpu = m.gpu; this.threads = m.threads; return;
       case 'forgotten': break;
     }
     this.host.onChange();

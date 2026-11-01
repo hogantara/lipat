@@ -53,8 +53,9 @@ function randn(n) {
 export class Supertonic {
   // files: { 'duration_predictor.onnx', 'text_encoder.onnx', 'vector_estimator.onnx', 'vocoder.onnx' } as bytes,
   // 'tts.json' as an object, 'unicode_indexer.bin' and 'voice.bin' as ArrayBuffers.
+  // sessionOptions: one set for all four models, or a function of the model's file name.
   static async create(ort, files, sessionOptions = {}) {
-    const open = (name) => ort.InferenceSession.create(files[name], sessionOptions);
+    const open = (name) => ort.InferenceSession.create(files[name], typeof sessionOptions === 'function' ? sessionOptions(name) : sessionOptions);
     // one at a time: four parallel compiles can double the peak memory on a phone
     const dp = await open('duration_predictor.onnx'), enc = await open('text_encoder.onnx');
     const est = await open('vector_estimator.onnx'), voc = await open('vocoder.onnx');
