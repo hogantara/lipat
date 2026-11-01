@@ -56,7 +56,10 @@ Any other static HTTPS host works too, as long as its origin is added to the OAu
     below 5 it sounds hissy) from how fast the device is, and the voice settings say what it runs on
     and how fast. If the device can't keep up, the player says "Preparing the next part" with how far
     along it is, gathers about a minute of speech (15 seconds on a device that keeps up), and goes on
-    by itself: a rare wait instead of one every few sentences.
+    by itself: a rare wait instead of one every few sentences. Once it is on the device it also prepares
+    ahead whenever a book is open, from where you are, up to 20 minutes, even before you press play and
+    while paused (not while the screen is off and nothing plays). So on a slow device a few minutes of
+    reading first give a long stretch of listening without a stop.
   - **Device**: the system's own voices (Web Speech API). Instant and in every language the device speaks,
     but Android stops it when the screen turns off. Lipat picks the best installed voice for the book's
     language. Used automatically for languages the natural voice doesn't speak.

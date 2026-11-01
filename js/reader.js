@@ -200,6 +200,7 @@ export class Reader {
     this._onScroll();
     this.scroller.focus({ preventScroll: true });
     db.updateBook(book.id, { lastOpened: Date.now() });
+    this.listen?.prepareSoon(2000);
   }
 
   close() {
