@@ -1,6 +1,6 @@
 // Lipat service worker: offline app shell, cached libraries, "Share to Lipat" inbox.
-const VERSION = 'lipat-v17';
-const SHELL = ['./', './index.html', './css/app.css', './js/app.js', './js/reader.js', './js/formats.js', './js/db.js', './js/config.js', './js/drive.js', './js/export.js', './js/speech.js', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png',
+const VERSION = 'lipat-v18';
+const SHELL = ['./', './index.html', './css/app.css', './js/app.js', './js/reader.js', './js/formats.js', './js/db.js', './js/config.js', './js/drive.js', './js/export.js', './js/speech.js', './js/natural.js', './js/supertonic.js', './js/voice-worker.js', './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png',
   './img/doodles/shelf-ink.webp', './img/doodles/shelf-accent.webp', './img/doodles/shelf-tone.webp', './img/doodles/marks-ink.webp', './img/doodles/marks-accent.webp', './img/doodles/marks-tone.webp'];
 const INBOX = 'lipat-inbox';
 
@@ -39,8 +39,9 @@ self.addEventListener('fetch', (e) => {
       .catch(async () => (await c.match(key)) || Response.error())));
     return;
   }
-  // Libraries: versioned URLs, so cache first.
-  if (/cdnjs\.cloudflare\.com|fonts\.(googleapis|gstatic)\.com/.test(url.host)) {
+  // Libraries: versioned URLs, so cache first. ONNX Runtime too (the natural voice); the voice model itself is kept
+  // in IndexedDB by the speech worker, not here, so a new version of the app doesn't download it again.
+  if (/cdnjs\.cloudflare\.com|fonts\.(googleapis|gstatic)\.com/.test(url.host) || (url.host === 'cdn.jsdelivr.net' && url.pathname.startsWith('/npm/onnxruntime-web@'))) {
     e.respondWith(caches.open(VERSION).then(async (c) => {
       const cached = await c.match(e.request);
       if (cached) return cached;

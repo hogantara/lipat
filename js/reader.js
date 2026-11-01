@@ -203,7 +203,7 @@ export class Reader {
   }
 
   close() {
-    this.listen?.stop();
+    this.listen?.stop(); this.listen?.release();
     this._savePosition(true);
     this.view.hidden = true;
     this.content.innerHTML = ''; this.pagesEl.innerHTML = '';
