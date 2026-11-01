@@ -348,7 +348,7 @@ export class ReadAloud {
     this.q = [];                   // queued in the engine, oldest first: { u, pos } (device voice)
     this.gen = 0;                  // bumped on every restart; events of older utterances are ignored
     // engine: null until the reader picks one; natural: Supertonic voice style; steps: its denoising steps, tuned to this device
-    this.prefs = { rate: 1, voices: {}, engine: null, natural: 5, steps: 6 };
+    this.prefs = { rate: 1, voices: {}, engine: null, natural: 0, steps: 6 };
     this.badVoices = new Set();    // network voices that failed this session
     this.following = true;         // the page keeps the voice in view until the reader scrolls away from it
     this.errors = 0;
@@ -365,6 +365,8 @@ export class ReadAloud {
       seg: (pos) => this._seg(pos), after: (pos) => this._after(pos),
       lang: () => baseOf(this.lang), voice: () => this.prefs.natural, steps: () => this.prefs.steps,
       speed: (sec, ms) => this._tune(sec, ms),
+      // slower than the voice: gather a minute before going on, so the waits are rare
+      refill: () => this.speedSeen && this.speedSeen < this.prefs.rate * 1.05 ? 60 : 15,
       onStart: (pos) => { if (this.state === 'playing' && !same(pos, this.cur)) this._setCurrent(pos); },
       onEnd: () => this._finish(),
       onChange: () => { this._ui(); if (!this.pop.hidden) this._renderPop(); },
@@ -822,7 +824,7 @@ export class ReadAloud {
     if (n && this.state === 'playing' && n.status !== 'ready') return n.status === 'failed' ? "The natural voice didn't load" : 'Getting the natural voice ready';
     if (this.ended) return 'End of the book';
     if (this.state === 'paused') return 'Paused';
-    if (n && n.waiting) return 'Preparing the next sentence';
+    if (n && n.waiting) return n.at < 0 ? 'Preparing the first sentence' : `Preparing the next part, ${Math.min(99, Math.floor(n.ready / n.target * 100))}%`;
     return 'Reading';
   }
   _ui() {

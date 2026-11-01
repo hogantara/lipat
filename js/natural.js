@@ -8,7 +8,9 @@
 export const NATURAL_MB = 145;
 const AHEAD_SECONDS = 240;   // generated ahead of the voice
 const HISTORY = 5;           // sentences kept behind it, so going back is instant
-const REFILL = 15;           // after running dry, seconds to have ready before going on: one wait instead of one per sentence
+// After running dry, seconds to have ready before going on: one wait instead of one per sentence. The host can ask for
+// more when the device makes speech slower than it is read (host.refill()).
+const REFILL = 15;
 const same = (a, b) => !!a && !!b && a.si === b.si && a.k === b.k;
 
 function wavBlob(pcm, rate) {
@@ -124,6 +126,9 @@ export class NaturalVoice {
   setRate(r) { this.rate = r; this.audio.defaultPlaybackRate = this.audio.playbackRate = r; }
   // how far into the current sentence, in seconds of its audio
   get elapsed() { return this.audio.currentTime || 0; }
+  // seconds of speech made ahead of the voice, and how much a wait gathers before going on
+  get ready() { return this.items.slice(this.at + 1).reduce((n, x) => n + x.dur, 0); }
+  get target() { return (this.host.refill?.() || REFILL) * this.rate; }
 
   _clear() {
     this._switchAt = performance.now();
@@ -150,8 +155,8 @@ export class NaturalVoice {
     this.items.push({ pos: p.pos, url: m.pcm ? URL.createObjectURL(wavBlob(m.pcm, m.sampleRate)) : null, dur });
     this.next = this.host.after(p.pos);
     // waiting: go on once enough is ready (all of it at the start of a reading, so it starts at once)
-    const ready = this.items.slice(this.at + 1).reduce((n, x) => n + x.dur, 0);
-    if (this.waiting && this.playing && this.items[this.at + 1] && (this.at < 0 || ready >= REFILL * this.rate || !this.next)) this._playAt(this.at + 1);
+    const ready = this.ready;
+    if (this.waiting && this.playing && this.items[this.at + 1] && (this.at < 0 || ready >= this.target || !this.next)) this._playAt(this.at + 1);
     else if (this.waiting && !this.next && this.playing) this._advance();
     this._pump();
   }
