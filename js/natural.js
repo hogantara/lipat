@@ -6,7 +6,7 @@
 // { seg(pos), after(pos), lang(), voice(), steps(), speed(seconds, ms), onStart(pos), onEnd(), onChange(), onPause(), onFail(message) }
 
 export const NATURAL_MB = 145;
-const AHEAD_SECONDS = 240;   // generated ahead of the voice
+const AHEAD_SECONDS = 1200;  // generated ahead of the voice: twenty minutes, so a device slower than the voice can get ahead
 const HISTORY = 5;           // sentences kept behind it, so going back is instant
 // After running dry, seconds to have ready before going on: one wait instead of one per sentence. The host can ask for
 // more when the device makes speech slower than it is read (host.refill()).
@@ -33,6 +33,8 @@ export class NaturalVoice {
     this.playing = false;      // the reader wants sound
     this.waiting = false;      // ...but the next sentence isn't made yet
     this.rate = 1; this.reqId = 0;
+    // making speech ahead stops while the page is hidden and silent, and goes on when it shows again
+    document.addEventListener('visibilitychange', () => this._pump());
     const a = this.audio = new Audio();
     a.preload = 'auto';
     a.addEventListener('ended', () => this._advance());
@@ -115,6 +117,14 @@ export class NaturalVoice {
     this.host.onChange();
     this._pump();
   }
+  // Make speech from pos without playing it, so a later play(pos) starts at once.
+  prepare(pos) {
+    if (this.playing) return;
+    if (this.items.some(x => same(x.pos, pos))) { this._pump(); return; }
+    this._clear();
+    this.next = pos;
+    this._pump();
+  }
   pause() {
     this.playing = false;
     if (!this.audio.paused) this.audio.pause();
@@ -139,6 +149,7 @@ export class NaturalVoice {
   }
   _pump() {
     if (this.pending || !this.next || this.status !== 'ready') return;
+    if (!this.playing && document.hidden) return;
     const ahead = this.items.slice(this.at + 1).reduce((n, x) => n + x.dur, 0);
     if (ahead > AHEAD_SECONDS && !this.waiting) return;
     const pos = this.next, s = this.host.seg(pos);

@@ -451,11 +451,26 @@ export class ReadAloud {
     this.q = []; this.next = this.cur = this.word = this.range = null; this.state = 'off'; this.following = true; this.ended = false;
     highlight(HL, null); highlight(HL_WORD, null);
     this.closePop(); this._audio(false); this._media(false); this._ui();
+    if (this.r.book) this.prepareSoon();
   }
   // a new book: forget the old one's sentences and language
   reset() { this.stop(); this.segs.clear(); this.key = null; this.detected = null; this.metaSid = null; }
   // the book closed: free the natural voice's memory (it stays on the device)
-  release() { this.nat.release(); }
+  release() { clearTimeout(this._pt); this.nat.release(); }
+  // Prepare ahead: with the natural voice chosen and on the device, make speech from where the reader is whenever the
+  // book is open, so listening later starts at once and doesn't wait on a slow device. Never downloads unasked.
+  prepareSoon(ms = 1500) { clearTimeout(this._pt); this._pt = setTimeout(() => this._prepare(), ms); }
+  async _prepare() {
+    await this.ready;
+    const r = this.r;
+    if (!r.book || this.state !== 'off' || r.pageMode || this.prefs.engine !== 'natural' || !this._naturalSpeaks()) return;
+    if (!(await this.nat.check()) || this.nat.status === 'failed' || this.state !== 'off' || !r.book) return;
+    this._setup();
+    const pos = this._visiblePos();
+    if (!pos) return;
+    this.nat.prepare(pos);
+    this.nat.load().catch(() => {});
+  }
   // Back: the start of this sentence, or the one before if this one only just began. Paused, it only moves.
   skip(dir) {
     if (this.state === 'off') return;
@@ -503,7 +518,8 @@ export class ReadAloud {
   // a new voice, language or engine: say the sentence again with it, so the choice can be heard
   _apply(fresh = false) {
     this._setup(); this._renderPop();
-    if (this.state === 'off') return;
+    // not listening: what was prepared ahead is in the old voice or language
+    if (this.state === 'off') { this.nat.stop(); this.prepareSoon(); return; }
     const p = this.cur || this._visiblePos();
     if (!p) return;
     if (this.engine === 'device') this._audio(true);
@@ -529,7 +545,8 @@ export class ReadAloud {
   _perf() {
     const n = this.nat, on = n.gpu ? "Runs on this device's graphics chip." : n.threads > 1 ? `Runs on ${n.threads} processor cores.` : n.threads ? 'Runs on one processor core.' : '';
     const speed = this.speedSeen ? ` Makes speech ${this.speedSeen.toFixed(1)} times as fast as it reads.` : '';
-    return on + speed;
+    const m = Math.floor(n.ready / 60), ahead = m >= 1 ? ` ${m} ${m === 1 ? 'minute is' : 'minutes are'} ready ahead.` : '';
+    return on + speed + ahead;
   }
 
   // ---------------------------------------------------------- language and voice
@@ -771,7 +788,9 @@ export class ReadAloud {
   // reader is still with the voice: following stops when its sentence leaves the screen, and starts
   // again when the reader scrolls back to it.
   onScroll() {
-    if (this.state === 'off' || !this.cur) return;
+    // not listening: prepare from where the reader has moved to, once the scrolling settles
+    if (this.state === 'off') { if (this.prefs.engine === 'natural') this.prepareSoon(2500); return; }
+    if (!this.cur) return;
     const check = () => { this.following = this._inView(); this._syncHere(); };
     clearTimeout(this._st); this._st = setTimeout(check, 1250); // and once more when all scrolling has settled
     // the page's own smooth scroll, on its way: between where it started and where it is going
