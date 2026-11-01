@@ -512,7 +512,7 @@ export class ReadAloud {
     const rtf = sec * 1000 / ms, need = this.prefs.rate * 1.25;
     this.rtf = this.rtf ? this.rtf * 0.6 + rtf * 0.4 : rtf;
     let s = this.prefs.steps;
-    if (this.rtf < need && s > 4) s--;
+    if (this.rtf < need && s > 3) s--;
     else if (this.rtf > need * 2 && s < 8) s++;
     if (s !== this.prefs.steps) { this.prefs.steps = s; this.rtf = null; this._save(); }
   }

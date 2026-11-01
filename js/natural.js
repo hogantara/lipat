@@ -8,6 +8,7 @@
 export const NATURAL_MB = 145;
 const AHEAD_SECONDS = 240;   // generated ahead of the voice
 const HISTORY = 5;           // sentences kept behind it, so going back is instant
+const REFILL = 15;           // after running dry, seconds to have ready before going on: one wait instead of one per sentence
 const same = (a, b) => !!a && !!b && a.si === b.si && a.k === b.k;
 
 function wavBlob(pcm, rate) {
@@ -95,6 +96,7 @@ export class NaturalVoice {
         this.status = 'failed'; this.error = m.message; this._loading = null; this._failed?.(new Error(m.message));
         this.host.onFail(m.message);
         break;
+      case 'threads': this.threads = m.n; return;
       case 'forgotten': break;
     }
     this.host.onChange();
@@ -147,7 +149,9 @@ export class NaturalVoice {
     if (m.pcm) this.host.speed(dur, m.ms);
     this.items.push({ pos: p.pos, url: m.pcm ? URL.createObjectURL(wavBlob(m.pcm, m.sampleRate)) : null, dur });
     this.next = this.host.after(p.pos);
-    if (this.waiting && this.playing && this.items.length - 1 === this.at + 1) this._playAt(this.at + 1);
+    // waiting: go on once enough is ready (all of it at the start of a reading, so it starts at once)
+    const ready = this.items.slice(this.at + 1).reduce((n, x) => n + x.dur, 0);
+    if (this.waiting && this.playing && this.items[this.at + 1] && (this.at < 0 || ready >= REFILL * this.rate || !this.next)) this._playAt(this.at + 1);
     else if (this.waiting && !this.next && this.playing) this._advance();
     this._pump();
   }
