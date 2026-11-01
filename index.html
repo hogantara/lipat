@@ -195,6 +195,22 @@
       <input id="rd-slider" type="range" min="0" max="1000" value="0" aria-label="Position">
       <div class="rd-meta"><span id="rd-pos"></span><span id="rd-left" class="muted"></span></div>
     </div>
+    <div id="say-bar" class="say-bar" role="region" aria-label="Listening" hidden>
+      <div class="say-top">
+        <p class="say-status" aria-live="polite"><span class="say-state">Reading</span><span class="say-where"></span></p>
+        <button class="say-link" data-say="find" hidden><i class="ph ph-arrow-u-down-left" aria-hidden="true"></i>Back to the voice</button>
+        <button class="say-link" data-say="here" hidden><i class="ph-fill ph-play" aria-hidden="true"></i>Read from here</button>
+        <button class="icon-btn say-close" data-say="stop" title="Stop listening" aria-label="Stop listening"><i class="ph ph-x" aria-hidden="true"></i></button>
+      </div>
+      <div class="say-meter" hidden><i></i></div>
+      <div class="say-row">
+        <button class="say-rate" data-say="rate" title="Speed" aria-label="Speed 1×. Change speed">1×</button>
+        <button class="icon-btn" data-say="back" title="Previous sentence" aria-label="Previous sentence"><i class="ph-fill ph-rewind" aria-hidden="true"></i></button>
+        <button class="say-play" data-say="play" title="Pause (P)" aria-label="Pause"><i class="ph-fill ph-pause" aria-hidden="true"></i></button>
+        <button class="icon-btn" data-say="next" title="Next sentence" aria-label="Next sentence"><i class="ph-fill ph-fast-forward" aria-hidden="true"></i></button>
+        <button class="icon-btn" data-say="voice" title="Voice" aria-label="Voice settings"><i class="ph ph-user-sound" aria-hidden="true"></i></button>
+      </div>
+    </div>
     <div class="rd-tools mobile-only rd-tools-bottom">
       <button class="icon-btn" data-act="contents" aria-label="Contents">
         <i class="ph ph-list" aria-hidden="true"></i>
@@ -311,19 +327,18 @@
     </div>
   </div>
 
-  <!-- read aloud: player, start-here chip, voice and speed -->
-  <div id="say-bar" class="say-bar" role="group" aria-label="Listening" hidden>
-    <button class="icon-btn" data-say="back" title="Previous sentence" aria-label="Previous sentence"><i class="ph-fill ph-skip-back" aria-hidden="true"></i></button>
-    <button class="say-play" data-say="play" title="Pause (P)" aria-label="Pause"><i class="ph-fill ph-pause" aria-hidden="true"></i></button>
-    <button class="icon-btn" data-say="next" title="Next sentence" aria-label="Next sentence"><i class="ph-fill ph-skip-forward" aria-hidden="true"></i></button>
-    <button class="say-rate" data-say="voice" title="Voice and speed" aria-label="Voice and speed"><span>1×</span></button>
-    <button class="icon-btn" data-say="stop" title="Stop listening" aria-label="Stop listening"><i class="ph ph-x" aria-hidden="true"></i></button>
-  </div>
-  <button id="say-here" class="say-here" hidden><i class="ph-fill ph-play" aria-hidden="true"></i>Read from here</button>
-  <div id="say-pop" class="pop say-pop sheet" role="dialog" aria-label="Voice and speed" hidden>
+  <!-- read aloud: voice settings (the player lives in the bottom bar) -->
+  <div id="say-pop" class="pop say-pop sheet" role="dialog" aria-labelledby="say-title" hidden>
     <div class="sheet-handle" aria-hidden="true"></div>
-    <label class="row"><span class="lbl">Language</span><select id="say-lang" class="input select"></select></label>
-    <label class="row"><span class="lbl">Voice</span><select id="say-voice" class="input select"></select></label>
+    <h2 id="say-title" class="say-title">Voice</h2>
+    <div class="seg say-engine" id="say-engine" role="radiogroup" aria-label="Voice">
+      <button data-v="natural" role="radio" aria-checked="true">Natural</button>
+      <button data-v="device" role="radio" aria-checked="false">Device</button>
+    </div>
+    <p id="say-about" class="say-about"></p>
+    <div id="say-dl" class="say-meter" hidden><i></i></div>
+    <button id="say-get" class="btn primary say-get" hidden><i class="ph ph-download-simple" aria-hidden="true"></i><span></span></button>
+    <label class="row"><span class="lbl">Speaker</span><select id="say-voice" class="input select"></select></label>
     <div class="row">
       <span class="lbl">Speed</span>
       <button class="step" data-rate="-0.1" aria-label="Slower"><i class="ph ph-minus" aria-hidden="true"></i></button>
@@ -331,7 +346,13 @@
       <button class="step" data-rate="0.1" aria-label="Faster"><i class="ph ph-plus" aria-hidden="true"></i></button>
       <output id="say-rate-val" for="say-rate">1×</output>
     </div>
+    <label class="row"><span class="lbl">Language</span><select id="say-lang" class="input select"></select></label>
     <p id="say-hint" class="say-hint muted small-text"></p>
+    <div class="say-foot">
+      <button id="say-remove" class="btn danger-text" hidden>Remove natural voice</button>
+      <span class="spacer"></span>
+      <button id="say-start" class="btn primary" hidden>Start listening</button>
+    </div>
   </div>
 
   <div id="rd-loading" class="rd-loading" hidden><div class="spinner"></div><div class="rd-loading-text">Opening…</div></div>

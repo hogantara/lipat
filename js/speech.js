@@ -1,5 +1,6 @@
-// Read aloud. Lipat speaks the book with the voices the device already has (Web Speech API): free,
-// offline once a voice is installed, and in every language the phone or browser can speak.
+// Read aloud. Two engines read the same sentences: the natural voice (Supertonic 3, run on the device; see natural.js)
+// and the device voice (the Web Speech API: free, in every language the phone or browser speaks, but stopped by Android
+// when the screen turns off). This module prepares the text, picks the engine and voice, and runs the player.
 //
 // Natural, understandable speech comes from what the voice is given and which voice is picked:
 // - The text is cleaned for the ear. Footnote numbers, page numbers, code, ruby readings and bullets
@@ -8,11 +9,11 @@
 // - It is spoken one whole sentence at a time, so the voice keeps its intonation. Intl.Segmenter
 //   splits after "Mr." or "J." and before "she asked", so those are joined again. Only very long
 //   sentences are cut, at a clause.
-// - The voice is the best one installed for the book's language: natural, premium and online voices
+// - The device voice is the best one installed for the book's language: natural, premium and online voices
 //   first, novelty and eSpeak voices last. The language comes from the file, or from the text itself
 //   when the file doesn't say (PDF, Word, text) or says something the text contradicts.
 //
-// Engine quirks handled here:
+// Device voice quirks handled here:
 // - Android Chrome can't pause(). Pause cancels, and play says the sentence again from its start.
 // - Chrome's network voices go silent after about 15 s in one utterance, so their sentences are cut shorter.
 // - Utterances are queued ahead in the engine, so the voice goes on with the screen off while the
@@ -23,6 +24,8 @@
 // Positions are character offsets into a section's textContent, like marks, so they survive the
 // <mark> and search-hit wrappers that split text nodes.
 import { db } from './db.js';
+import { NaturalVoice, NATURAL_MB } from './natural.js';
+import { SUPERTONIC_LANGS, SUPERTONIC_VOICES } from './supertonic.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -331,24 +334,39 @@ function hint(hasVoice) {
 }
 
 // ------------------------------------------------------------ the player
+// Two engines read the same sentences. The natural voice (Supertonic 3, natural.js) sounds like a person and keeps
+// going with the screen off; it speaks 31 languages and downloads once. The device voice (Web Speech API, below) needs
+// nothing and speaks every language the device has, but Android stops it when the screen turns off.
+const RATES = [0.8, 1, 1.2, 1.5, 1.75, 2];
 export class ReadAloud {
   constructor(reader) {
     this.r = reader;
     this.state = 'off';            // off | playing | paused
     this.segs = new Map();         // section index -> utterances, built when first needed
     this.cur = null;               // { si, k } being read, or paused on
-    this.next = null;              // the next one to queue
-    this.q = [];                   // queued in the engine, oldest first: { u, pos }
+    this.next = null;              // the next one to queue (device voice)
+    this.q = [];                   // queued in the engine, oldest first: { u, pos } (device voice)
     this.gen = 0;                  // bumped on every restart; events of older utterances are ignored
-    this.prefs = { rate: 1, voices: {} };
+    // engine: null until the reader picks one; natural: Supertonic voice style; steps: its denoising steps, tuned to this device
+    this.prefs = { rate: 1, voices: {}, engine: null, natural: 5, steps: 6 };
     this.badVoices = new Set();    // network voices that failed this session
     this.following = true;         // the page keeps the voice in view until the reader scrolls away from it
     this.errors = 0;
-    this.bar = $('#say-bar'); this.pop = $('#say-pop'); this.here = $('#say-here');
+    this.bar = $('#say-bar'); this.pop = $('#say-pop');
     // voices load late on most platforms; ask early so the first tap can speak at once
     this.voices = speechSynthesis.getVoices();
     onVoices(() => { this.voices = speechSynthesis.getVoices(); if (!this.pop.hidden) this._renderPop(); });
-    db.getSetting('listen', null).then(p => { if (p) this.prefs = { ...this.prefs, ...p, voices: { ...(p.voices || {}) } }; this._syncRate(); });
+    this.ready = db.getSetting('listen', null).then(p => { if (p) this.prefs = { ...this.prefs, ...p, voices: { ...(p.voices || {}) } }; this._syncRate(); });
+    this.nat = new NaturalVoice({
+      seg: (pos) => this._seg(pos), after: (pos) => this._after(pos),
+      lang: () => baseOf(this.lang), voice: () => this.prefs.natural, steps: () => this.prefs.steps,
+      speed: (sec, ms) => this._tune(sec, ms),
+      onStart: (pos) => { if (this.state === 'playing' && !same(pos, this.cur)) this._setCurrent(pos); },
+      onEnd: () => this._finish(),
+      onChange: () => { this._ui(); if (!this.pop.hidden) this._renderPop(); },
+      onPause: () => { if (this.state === 'playing') { this.state = 'paused'; this._ui(); } },
+      onFail: (msg) => { if (this.engine === 'natural' && this.state !== 'off') { this.pause(); this.r.toast("The natural voice didn't load. Check your connection and try again.", { label: 'Details', fn: () => this.r.toast(String(msg).slice(0, 160)) }); } },
+    });
     // a mark or search hit wraps text under the highlight: point the highlight at the new nodes
     this.observer = new MutationObserver(() => { if (this.state !== 'off') this._paint(); });
     addEventListener('pagehide', () => speechSynthesis.cancel());
@@ -362,15 +380,29 @@ export class ReadAloud {
   _wire() {
     this.bar.addEventListener('click', (ev) => {
       const b = ev.target.closest('[data-say]'); if (!b) return;
-      ({ play: () => this.toggle(), back: () => this.skip(-1), next: () => this.skip(1), voice: () => this.togglePop(), stop: () => this.stop() })[b.dataset.say]?.();
+      ({ play: () => this.toggle(), back: () => this.skip(-1), next: () => this.skip(1), voice: () => this.togglePop(), stop: () => this.stop(),
+        rate: () => this.setRate(RATES.find(x => x > this.prefs.rate + 0.01) || RATES[0]),
+        here: () => this.play({ here: true }), find: () => { this.following = true; this._reveal(true); this._ui(); } })[b.dataset.say]?.();
     });
-    this.here.onclick = () => this.play({ here: true });
+    $('#say-engine').onclick = (ev) => { const b = ev.target.closest('button'); if (b) this.setEngine(b.dataset.v); };
+    $('#say-get').onclick = () => this._getNatural();
+    // the first-time choice is kept only once the reader starts with it
+    $('#say-start').onclick = () => { this.prefs.engine = this._chosen || 'natural'; this._save(); this.closePop(); this.play(); };
+    $('#say-remove').onclick = () => {
+      if (!confirm(`Remove the natural voice from this device? Getting it back is a ${NATURAL_MB} MB download.`)) return;
+      if (this.engine === 'natural') this.stop();
+      this.nat.forget(); this._renderPop();
+    };
     $('#say-lang').onchange = (ev) => this.setLang(ev.target.value);
     $('#say-voice').onchange = (ev) => this.setVoice(ev.target.value);
     const rate = $('#say-rate');
     rate.oninput = () => this.setRate(Number(rate.value));
     $$('[data-rate]', this.pop).forEach(b => b.onclick = () => this.setRate(Math.round((this.prefs.rate + Number(b.dataset.rate)) * 10) / 10));
   }
+
+  // which engine reads this book: the natural voice when chosen and it speaks the language
+  get engine() { return this.prefs.engine === 'natural' && this._naturalSpeaks() ? 'natural' : 'device'; }
+  _naturalSpeaks() { return !!this.r.book && SUPERTONIC_LANGS.has(baseOf(this.r.book.speechLang || this._bookLang())); }
 
   // ---------------------------------------------------------- controls
   toggle() { if (this.state === 'playing') this.pause(); else this.play(); }
@@ -381,32 +413,43 @@ export class ReadAloud {
     const r = this.r, book = r.book;
     if (!book) return;
     if (book.isScanned) { r.toast('This PDF is scanned pages, so there is no text to read aloud.'); return; }
+    await this.ready;
+    // the first time, the reader picks a voice: the choice is a 145 MB download or a voice that stops with the screen
+    if (!this.prefs.engine && this._naturalSpeaks() && this.state === 'off') { this._chosen = 'natural'; this.openPop(); return; }
     this.errors = 0;
-    if (r.pageMode || !this.voices.length) unlock();
-    this._audio(true); this._media(true);
+    const natural = this.engine === 'natural';
+    if (!natural && (r.pageMode || !this.voices.length)) unlock();
+    if (!natural) this._audio(true);
+    this._media(true);
     if (r.pageMode) { await r.setPageMode(false); await frame(); if (r.book !== book) return; }
-    if (!this.voices.length) { this.voices = await voicesReady(); if (r.book !== book) return; }
+    if (!natural && !this.voices.length) { this.voices = await voicesReady(); if (r.book !== book) return; }
     const resume = !here && this.state === 'paused' && this.cur && this._inView();
     this._setup();
     const pos = this._fromSelection() || (resume ? this.cur : null) || this._visiblePos();
     if (!pos) { if (this.state !== 'playing') { this._audio(false); if (this.state === 'off') this._media(false); } r.toast('There is no text here to read aloud.'); return; }
+    if (natural && resume && pos === this.cur && this.nat.canResume(pos)) { this.state = 'playing'; this.nat.resume(); this._ui(); return; }
     this._playFrom(pos, true);
+    if (natural && this.nat.status !== 'ready') this.nat.load().catch(() => {});
   }
   pause() {
     if (this.state !== 'playing') return;
     this.gen++; clearTimeout(this.dog); speechSynthesis.cancel(); this.q = [];
+    this.nat.pause();
     this.state = 'paused'; this.word = null; highlight(HL_WORD, null);
     this._audio(false); this._ui();
   }
   stop() {
     if (this.state === 'off') return;
     this.gen++; clearTimeout(this.dog); clearTimeout(this._rt); clearTimeout(this._st); speechSynthesis.cancel();
-    this.q = []; this.next = this.cur = this.word = this.range = null; this.state = 'off'; this.following = true;
+    this.nat.stop();
+    this.q = []; this.next = this.cur = this.word = this.range = null; this.state = 'off'; this.following = true; this.ended = false;
     highlight(HL, null); highlight(HL_WORD, null);
     this.closePop(); this._audio(false); this._media(false); this._ui();
   }
   // a new book: forget the old one's sentences and language
   reset() { this.stop(); this.segs.clear(); this.key = null; this.detected = null; this.metaSid = null; }
+  // the book closed: free the natural voice's memory (it stays on the device)
+  release() { this.nat.release(); }
   // Back: the start of this sentence, or the one before if this one only just began. Paused, it only moves.
   skip(dir) {
     if (this.state === 'off') return;
@@ -422,27 +465,56 @@ export class ReadAloud {
   setRate(v) {
     this.prefs.rate = Math.round(clamp(v || 1, 0.6, 2.5) * 100) / 100;
     this._save(); this._syncRate(); this._ui();
+    // the natural voice changes speed at once; the device voice says the sentence again at the new speed
+    this.nat.setRate(this.prefs.rate);
     clearTimeout(this._rt);
-    if (this.state === 'playing') this._rt = setTimeout(() => { if (this.state === 'playing') { this._setup(); this._playFrom(this.cur || this.next); } }, 400);
+    if (this.state === 'playing' && this.engine === 'device') this._rt = setTimeout(() => { if (this.state === 'playing') { this._setup(); this._playFrom(this.cur || this.next); } }, 400);
   }
-  setVoice(uri) {
+  setVoice(v) {
+    if (this.engine === 'natural') { this.prefs.natural = Number(v) || 0; this._save(); this._apply(true); return; }
     const b = baseOf(this.lang || this._bookLang());
-    if (uri) this.prefs.voices[b] = uri; else delete this.prefs.voices[b];
+    if (v) this.prefs.voices[b] = v; else delete this.prefs.voices[b];
     this._save(); this._apply();
   }
   setLang(b) {
     const book = this.r.book;
     book.speechLang = b || null;
     db.updateBook(book.id, { speechLang: book.speechLang });
-    this._apply();
+    this._apply(true);
   }
-  // a new voice or language: say the sentence again in it, so the choice can be heard
-  _apply() {
+  setEngine(e) {
+    if (e === this.prefs.engine && this.engine === e) return;
+    const was = this.engine;
+    this._chosen = e;
+    if (this.prefs.engine || this.state !== 'off') { this.prefs.engine = e; this._save(); }
+    if (this.state !== 'off' && this.engine !== was) {
+      // the other engine goes on from the same sentence
+      this.gen++; speechSynthesis.cancel(); this.q = []; clearTimeout(this.dog); this.nat.stop(); this._audio(false);
+      this._apply(true);
+      if (this.engine === 'natural' && this.nat.status !== 'ready') this.nat.load().catch(() => {});
+    } else this._renderPop();
+  }
+  // a new voice, language or engine: say the sentence again with it, so the choice can be heard
+  _apply(fresh = false) {
     this._setup(); this._renderPop();
     if (this.state === 'off') return;
     const p = this.cur || this._visiblePos();
     if (!p) return;
-    this._audio(true); this._playFrom(p);
+    if (this.engine === 'device') this._audio(true);
+    this._playFrom(p, false, fresh);
+  }
+  _getNatural() {
+    this.nat.load().catch(() => {});
+    this._renderPop();
+  }
+  // The natural voice must make speech faster than it is read: fewer denoising steps on a slower device, more on a faster one.
+  _tune(sec, ms) {
+    const rtf = sec * 1000 / ms, need = this.prefs.rate * 1.25;
+    this.rtf = this.rtf ? this.rtf * 0.6 + rtf * 0.4 : rtf;
+    let s = this.prefs.steps;
+    if (this.rtf < need && s > 4) s--;
+    else if (this.rtf > need * 2 && s < 8) s++;
+    if (s !== this.prefs.steps) { this.prefs.steps = s; this.rtf = null; this._save(); }
   }
   _save() { db.setSetting('listen', this.prefs); }
 
@@ -470,8 +542,9 @@ export class ReadAloud {
   _setup() {
     const book = this.r.book;
     const lang = book.speechLang || this._bookLang();
-    const voice = this._pickVoice(lang);
-    const maxLen = voice && !voice.localService ? Math.round(170 * clamp(this.prefs.rate, 0.7, 2)) : 320;
+    const voice = this._pickVoice(lang), natural = this.engine === 'natural';
+    // the natural voice was trained on pieces of up to 300 characters; Chrome's network voices go quiet after about 15 s
+    const maxLen = natural ? 300 : voice && !voice.localService ? Math.round(170 * clamp(this.prefs.rate, 0.7, 2)) : 320;
     const key = `${lang}|${maxLen}`;
     if (key !== this.key) {
       const keep = this.cur && this._seg(this.cur) && { si: this.cur.si, off: this._seg(this.cur).start };
@@ -480,7 +553,7 @@ export class ReadAloud {
     }
     this.lang = lang; this.voice = voice;
     // (an engine that lists no voices at all still speaks with its default one: nothing to warn about)
-    if (this.voices.length && baseOf(voice?.lang) !== baseOf(lang) && this.warned !== book.id + lang) {
+    if (!natural && this.voices.length && baseOf(voice?.lang) !== baseOf(lang) && this.warned !== book.id + lang) {
       this.warned = book.id + lang;
       this.r.toast(`No ${langName(baseOf(lang))} voice on this device yet.`, { label: 'Voices', fn: () => this.openPop() });
     }
@@ -550,11 +623,12 @@ export class ReadAloud {
   }
 
   // ---------------------------------------------------------- the engine
-  _playFrom(pos, jump = false) {
+  _playFrom(pos, jump = false, fresh = false) {
     const gen = ++this.gen, busy = speechSynthesis.speaking || speechSynthesis.pending;
     speechSynthesis.cancel();
-    this.q = []; this.next = pos; this.state = 'playing'; this.lastEvent = Date.now();
+    this.q = []; this.next = pos; this.state = 'playing'; this.lastEvent = Date.now(); this.ended = false;
     this._setCurrent(pos, jump);
+    if (this.engine === 'natural') { clearTimeout(this.dog); this.nat.setRate(this.prefs.rate); this.nat.play(pos, { fresh }); this._ui(); return; }
     this._ui();
     const go = () => { if (gen === this.gen) { this._fill(); this._watch(); } };
     // some engines drop a speak() that comes straight after cancel()
@@ -616,8 +690,8 @@ export class ReadAloud {
     if (nx) this._playFrom(nx); else this._finish();
   }
   _finish() {
-    this.gen++; clearTimeout(this.dog);
-    this.q = []; this.next = this.cur = this.word = this.range = null; this.state = 'paused';
+    this.gen++; clearTimeout(this.dog); this.nat.stop();
+    this.q = []; this.next = this.cur = this.word = this.range = null; this.state = 'paused'; this.ended = true;
     highlight(HL, null); highlight(HL_WORD, null);
     this._audio(false); this._ui();
     this.r.toast('End of the book.');
@@ -673,7 +747,12 @@ export class ReadAloud {
   }
   // "Read from here": when the reader has scrolled away from the voice, or selected text to start at
   sync() { this._syncHere(); }
-  _syncHere() { this.here.hidden = !(this.state !== 'off' && (!!this.r.pending || (!!this.cur && !this.following))); }
+  _syncHere() {
+    const on = this.state !== 'off', away = on && !!this.cur && !this.following, here = on && (!!this.r.pending || away);
+    $('[data-say="here"]', this.bar).hidden = !here;
+    $('[data-say="find"]', this.bar).hidden = !away || !!this.r.pending;
+    this.bar.classList.toggle('is-away', here);
+  }
   // Any scroll but the page's own following (a swipe, the contents, a search hit) decides whether the
   // reader is still with the voice: following stops when its sentence leaves the screen, and starts
   // again when the reader scrolls back to it.
@@ -724,6 +803,16 @@ export class ReadAloud {
   }
 
   // ---------------------------------------------------------- bar and sheet
+  // What the player is doing, in a few words.
+  _statusText() {
+    const n = this.engine === 'natural' && this.nat;
+    if (n && n.status === 'downloading') return `Downloading the natural voice, ${Math.floor(n.progress * 100)}%`;
+    if (n && this.state === 'playing' && n.status !== 'ready') return n.status === 'failed' ? "The natural voice didn't load" : 'Getting the natural voice ready';
+    if (this.ended) return 'End of the book';
+    if (this.state === 'paused') return 'Paused';
+    if (n && n.waiting) return 'Preparing the next sentence';
+    return 'Reading';
+  }
   _ui() {
     const on = this.state !== 'off', playing = this.state === 'playing';
     document.body.classList.toggle('listening', on);
@@ -731,8 +820,19 @@ export class ReadAloud {
     const pb = $('[data-say="play"]', this.bar);
     pb.innerHTML = `<i class="ph-fill ph-${playing ? 'pause' : 'play'}" aria-hidden="true"></i>`;
     pb.setAttribute('aria-label', playing ? 'Pause' : 'Play'); pb.title = `${playing ? 'Pause' : 'Play'} (P)`;
-    $('[data-say="voice"] span', this.bar).textContent = fmtRate(this.prefs.rate);
-    for (const b of $$('[data-act="listen"]', this.r.view)) { b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', String(playing)); }
+    if (on) {
+      const n = this.engine === 'natural' && this.nat, busy = n && playing && (n.status !== 'ready' || n.waiting);
+      $('.say-state', this.bar).textContent = this._statusText();
+      const sec = this.cur && this.r.book.sections[this.cur.si];
+      $('.say-where', this.bar).textContent = sec ? (this.r.book.sectionTitles?.[sec.id] || sec.title || '').trim() : '';
+      this.bar.classList.toggle('is-busy', !!busy);
+      const meter = $('.say-meter', this.bar);
+      meter.hidden = !(n && n.status === 'downloading');
+      meter.firstElementChild.style.width = n ? `${Math.round(n.progress * 100)}%` : '0';
+      const rate = $('[data-say="rate"]', this.bar);
+      rate.textContent = fmtRate(this.prefs.rate); rate.setAttribute('aria-label', `Speed ${fmtRate(this.prefs.rate)}. Change speed`);
+    }
+    for (const b of $$('[data-act="listen"]', this.r.view)) { b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', String(playing)); b.title = playing ? 'Pause (P)' : 'Listen (P)'; }
     try { if (navigator.mediaSession) navigator.mediaSession.playbackState = on ? (playing ? 'playing' : 'paused') : 'none'; } catch {}
     if (on) this.observer.observe(this.r.content, { childList: true, subtree: true }); else this.observer.disconnect();
     this._syncHere();
@@ -741,13 +841,14 @@ export class ReadAloud {
     const r = this.prefs.rate, el = $('#say-rate');
     el.value = r; el.setAttribute('aria-valuetext', fmtRate(r));
     $('#say-rate-val').textContent = fmtRate(r);
-    $('[data-say="voice"] span', this.bar).textContent = fmtRate(r);
+    $('[data-say="rate"]', this.bar).textContent = fmtRate(r);
   }
   togglePop(open = this.pop.hidden) {
     const r = this.r;
     if (open) { r.panel.hidden = true; r.typePop.hidden = true; r.closeEditor(); if (r.pending) r.hideBubble(); this._renderPop(); }
     this.pop.hidden = !open;
     r._syncScrim();
+    if (open) this.nat.check().then(() => { if (!this.pop.hidden) this._renderPop(); });
   }
   openPop() { this.togglePop(true); }
   closePop() { if (!this.pop.hidden) { this.pop.hidden = true; this.r._syncScrim(); } }
@@ -755,26 +856,61 @@ export class ReadAloud {
     const book = this.r.book;
     if (!book) return;
     if (!this.voices.length) this.voices = speechSynthesis.getVoices();
+    const first = !this.prefs.engine, choice = first ? (this._chosen || 'natural') : this.prefs.engine;
     const auto = baseOf(this._bookLang()), lang = book.speechLang || this._bookLang(), base = baseOf(lang);
-    const bases = [...new Set(this.voices.map(v => baseOf(v.lang)).filter(Boolean))].filter(b => b !== auto).sort((a, b) => langName(a).localeCompare(langName(b)));
+    const speaks = SUPERTONIC_LANGS.has(base), n = this.nat, natural = choice === 'natural' && speaks;
+    // engine
+    $$('#say-engine button').forEach(b => { const on = b.dataset.v === choice; b.classList.toggle('is-active', on); b.setAttribute('aria-checked', String(on)); });
+    const has = n.status === 'stored' || n.status === 'ready' || n.status === 'preparing';
+    const about = choice === 'device' ? 'Uses the voices built into this device. Starts at once. On Android it stops when the screen turns off.'
+      : !speaks ? `The natural voice doesn't speak ${langName(base)} yet. This book uses the device voice.`
+      : n.status === 'downloading' ? `Downloading, ${Math.round(n.progress * NATURAL_MB)} of ${NATURAL_MB} MB. You can keep reading.`
+      : n.status === 'failed' ? "The download didn't finish. Check your connection and try again."
+      : has ? 'Sounds like a person and keeps reading with the screen off. Stored on this device.'
+      : `Sounds like a person and keeps reading with the screen off. A one-time ${NATURAL_MB} MB download.`;
+    $('#say-about').textContent = about;
+    const meter = $('#say-dl');
+    meter.hidden = !(choice === 'natural' && n.status === 'downloading');
+    meter.firstElementChild.style.width = `${Math.round(n.progress * 100)}%`;
+    // download: offered in place unless the first-time button below does it
+    const get = $('#say-get');
+    get.hidden = first || !natural || has || n.status === 'downloading' || n.status === 'unknown';
+    $('span', get).textContent = n.status === 'failed' ? 'Try again' : `Download, ${NATURAL_MB} MB`;
+    $('#say-remove').hidden = first || !has;
+    const start = $('#say-start');
+    start.hidden = !first;
+    start.textContent = natural && !has ? `Download and listen` : 'Start listening';
+    // speaker
+    const vs = $('#say-voice'), vrow = vs.closest('.row');
+    vrow.hidden = first;
+    if (natural) {
+      vs.innerHTML = SUPERTONIC_VOICES.map((v, i) => `<option value="${i}">${v[0] === 'F' ? 'Female' : 'Male'} ${v.slice(1)}</option>`).join('');
+      vs.value = String(this.prefs.natural); vs.disabled = false;
+    } else {
+      const ranked = rankVoices(this.voices.filter(v => !this.badVoices.has(v.voiceURI)), lang);
+      // the region, when the voices differ in it and the name doesn't say
+      const regions = new Set(ranked.map(v => normLang(v.lang).split('-')[1]).filter(Boolean));
+      const label = (v) => {
+        let t = voiceLabel(v);
+        const rg = normLang(v.lang).split('-')[1];
+        if (regions.size > 1 && rg && !t.includes(regionName(rg)) && !new RegExp(`\\b(${rg}${rg === 'GB' ? '|UK' : ''})\\b`).test(t)) t += `, ${regionName(rg)}`;
+        return t;
+      };
+      const want = this.prefs.voices[base];
+      vs.innerHTML = ranked.length ? `<option value="">Automatic (${esc(label(ranked[0]))})</option>` + ranked.map(v => `<option value="${esc(v.voiceURI)}">${esc(label(v))}</option>`).join('')
+        : `<option value="">${this.voices.length ? `No ${esc(langName(base))} voice on this device` : 'Device default'}</option>`;
+      vs.value = want && ranked.some(v => v.voiceURI === want) ? want : '';
+      vs.disabled = !ranked.length;
+      $('#say-hint').textContent = first ? '' : hint(ranked.length > 0 || !this.voices.length);
+    }
+    $('#say-hint').hidden = natural || first;
+    // language
+    const bases = [...new Set([...SUPERTONIC_LANGS, ...this.voices.map(v => baseOf(v.lang)).filter(Boolean)])].filter(b => b !== auto).sort((a, b) => langName(a).localeCompare(langName(b)));
     const ls = $('#say-lang');
     ls.innerHTML = `<option value="">Automatic (${esc(langName(auto))})</option>` + bases.map(b => `<option value="${esc(b)}">${esc(langName(b))}</option>`).join('');
     ls.value = book.speechLang && baseOf(book.speechLang) !== auto ? baseOf(book.speechLang) : '';
-    const ranked = rankVoices(this.voices.filter(v => !this.badVoices.has(v.voiceURI)), lang);
-    // the region, when the voices differ in it and the name doesn't say
-    const regions = new Set(ranked.map(v => normLang(v.lang).split('-')[1]).filter(Boolean));
-    const label = (v) => {
-      let n = voiceLabel(v);
-      const rg = normLang(v.lang).split('-')[1];
-      if (regions.size > 1 && rg && !n.includes(regionName(rg)) && !new RegExp(`\\b(${rg}${rg === 'GB' ? '|UK' : ''})\\b`).test(n)) n += `, ${regionName(rg)}`;
-      return n;
-    };
-    const vs = $('#say-voice'), want = this.prefs.voices[base];
-    vs.innerHTML = ranked.length ? `<option value="">Automatic (${esc(label(ranked[0]))})</option>` + ranked.map(v => `<option value="${esc(v.voiceURI)}">${esc(label(v))}</option>`).join('')
-      : `<option value="">${this.voices.length ? `No ${esc(langName(base))} voice on this device` : 'Device default'}</option>`;
-    vs.value = want && ranked.some(v => v.voiceURI === want) ? want : '';
-    vs.disabled = !ranked.length;
+    ls.closest('.row').hidden = first;
+    $('#say-rate').closest('.row').hidden = first;
     this._syncRate();
-    $('#say-hint').textContent = hint(ranked.length > 0 || !this.voices.length);
   }
 }

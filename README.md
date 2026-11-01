@@ -42,22 +42,27 @@ Any other static HTTPS host works too, as long as its origin is added to the OAu
 
 **Listening**
 - Every book can be read aloud, in every format. Tap the headphones (`P` on a keyboard). Lipat reads
-  from the top of the screen, or from a word you long-press or select, and highlights the sentence and
-  the word being spoken. The page follows the voice until you scroll away; then "Read from here"
-  starts it where you are.
-- Voices are the device's own (Web Speech API): free, offline once installed, in every language the
-  phone or browser speaks. Lipat picks the best one installed for the book's language. Natural,
-  premium and online voices come first, novelty and eSpeak voices last. The language comes from the
-  file, or from the text itself for PDF, Word and text files. Language, voice and speed (0.6× to 2.5×)
-  can be changed from the player.
+  from the top of the screen, or from a word you long-press or select, and highlights the sentence
+  being spoken. The page follows the voice until you scroll away; then the player offers "Back to the
+  voice" and "Read from here".
+- Two voices, chosen the first time you listen and changed any time from the player:
+  - **Natural**: [Supertonic 3](https://github.com/supertone-inc/supertonic) by Supertone, a neural voice
+    that sounds like a person, in 31 languages including English and Indonesian, with ten speakers. It runs
+    on the device in a worker with ONNX Runtime, so book text never leaves it, and plays through an audio
+    element, so it keeps reading with the screen off and shows lock-screen controls. A one-time 145 MB
+    download from jsDelivr, checked against SHA-256 sums and kept in IndexedDB. It works ahead of the
+    voice and picks its quality (denoising steps) from how fast the device is; if the device can't keep
+    up, the player says "Preparing the next sentence" and goes on by itself.
+  - **Device**: the system's own voices (Web Speech API). Instant and in every language the device speaks,
+    but Android stops it when the screen turns off. Lipat picks the best installed voice for the book's
+    language. Used automatically for languages the natural voice doesn't speak.
+- The language comes from the file, or from the text itself for PDF, Word and text files. Speaker, speed
+  (0.6× to 2.5×; the speed button cycles common speeds) and language are in the player's voice settings.
 - The text is prepared for the ear: footnote numbers, page numbers, code and bullets are skipped, links
   are read as their site name, headings and runs in capitals are not spelled out, and abbreviations
   like "Mr.", "Jl." or "J. R. R." don't break a sentence. Each sentence is spoken whole so the voice
   keeps its intonation.
 - Lock screen, notification and headset buttons play, pause and skip (Media Session).
-- For the most natural speech: on Android install voice data in Settings, Text-to-speech output; on
-  iPhone and Mac download an Enhanced or Premium voice in Accessibility, Spoken Content; on Windows,
-  Microsoft Edge has natural online voices built in.
 
 **Keeping**
 - Select text, tap a reaction: 💡 Aha · ❤️ Love · 🤔 Hmm · 😮 Whoa · 😤 Nope (keys `1`–`5`).
@@ -103,6 +108,9 @@ css/app.css           mobile-first styles, desktop overrides at ≥760px
 js/app.js             shelf, import, marks view, settings, Drive sync, PWA plumbing
 js/reader.js          reading surface, marks, sheets/panels, search, PDF page mode
 js/speech.js          read aloud: text for the ear, voice choice, player, highlight, Media Session
+js/natural.js         natural voice, page side: works ahead, plays through one audio element
+js/voice-worker.js    natural voice, worker side: download, checksums, IndexedDB, ONNX Runtime
+js/supertonic.js      Supertonic 3 inference (port of the reference web helper)
 js/formats.js         format detection + parsers (PDF reflow, EPUB, DOCX, MD, HTML, TXT)
 js/export.js          Markdown builders (book files, reaction files, index, download)
 js/drive.js           Google Drive client (GIS token flow, drive.file scope)
@@ -112,7 +120,10 @@ manifest.webmanifest  PWA manifest (icons, share_target, file_handlers)
 samples/              demo books
 ```
 
-Libraries load from cdnjs on first use: pdf.js, JSZip, mammoth, marked, DOMPurify. Google
+Libraries load from cdnjs on first use: pdf.js, JSZip, mammoth, marked, DOMPurify. The natural voice
+loads ONNX Runtime Web and the Supertonic 3 model (OpenRAIL-M licence; sample code MIT) from jsDelivr only when
+chosen; the model files are the `@3sln/donki-lle-voice-multi` npm packages, a sherpa-onnx conversion of
+`Supertone/supertonic-3`. Google
 Identity Services loads only when you connect Drive, and the Google Picker only when you add from Drive.
 
 ## Notes on the PDF reflow
