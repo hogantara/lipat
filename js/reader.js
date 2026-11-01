@@ -2,6 +2,7 @@
 // contents panel, in-book search, PDF original-layout mode.
 import { db, uid } from './db.js';
 import { getPdfjs } from './formats.js';
+import { ReadAloud, speechSupported } from './speech.js';
 
 export const EMOJIS = [
   { e: '💡', label: 'Aha' },
@@ -60,6 +61,8 @@ export class Reader {
     this.pageMode = false; this.pdf = null; this.zoom = 1; this.pageObserver = null;
     this.editingMark = null; this.lastScroll = 0; this.saveTimer = null; this.pending = null; this.pendingEls = null;
     this._wire();
+    // read aloud, where the browser has speech synthesis
+    this.listen = speechSupported() ? new ReadAloud(this) : null;
   }
 
   // ------------------------------------------------------------ wiring
@@ -75,14 +78,15 @@ export class Reader {
         case 'bookmark': this.toggleBookmark(); break;
         case 'type': this.togglePop(); break;
         case 'layout': this.setPageMode(!this.pageMode); break;
+        case 'listen': this.listen?.toggle(); break;
       }
     });
-    this.scrim.addEventListener('click', () => { this.togglePanel(null); this.typePop.hidden = true; this.closeEditor(); this._syncScrim(); });
+    this.scrim.addEventListener('click', () => this._closeSheets());
     // swipe down on a sheet handle closes it
     $$('.sheet-handle', this.view).forEach(h => {
       let y0 = null;
       h.addEventListener('touchstart', (e) => { y0 = e.touches[0].clientY; }, { passive: true });
-      h.addEventListener('touchmove', (e) => { if (y0 !== null && e.touches[0].clientY - y0 > 50) { y0 = null; this.togglePanel(null); this.typePop.hidden = true; this.closeEditor(); this._syncScrim(); } }, { passive: true });
+      h.addEventListener('touchmove', (e) => { if (y0 !== null && e.touches[0].clientY - y0 > 50) { y0 = null; this._closeSheets(); } }, { passive: true });
     });
     $('.panel-close', this.panel).onclick = () => this.togglePanel(null);
     $$('.panel-tabs .tab', this.panel).forEach(b => b.onclick = () => this.showPanelTab(b.dataset.ptab));
@@ -138,6 +142,7 @@ export class Reader {
     // outside clicks close popovers
     this.view.addEventListener('mousedown', (ev) => {
       if (!this.typePop.hidden && !ev.target.closest('#type-pop, [data-act="type"]')) this.typePop.hidden = true;
+      if (this.listen && !this.listen.pop.hidden && !ev.target.closest('#say-pop, [data-say="voice"]')) this.listen.closePop();
       if (!this.editor.hidden && !ev.target.closest('#mark-editor, mark.hl')) this.closeEditor();
       if (!this.panel.hidden && !ev.target.closest('#panel, .rd-top, .rd-bottom') && isMobile()) this.togglePanel(null);
       setTimeout(() => this._syncScrim(), 0);
@@ -169,6 +174,7 @@ export class Reader {
 
   // ------------------------------------------------------------ open / close
   async open(book) {
+    this.listen?.reset();
     this.book = book;
     this.view.hidden = false;
     $('#rd-loading').hidden = false; $('#rd-loading').classList.remove('under-bars');
@@ -197,6 +203,7 @@ export class Reader {
   }
 
   close() {
+    this.listen?.stop();
     this._savePosition(true);
     this.view.hidden = true;
     this.content.innerHTML = ''; this.pagesEl.innerHTML = '';
@@ -323,6 +330,7 @@ export class Reader {
     if (!this.pending) this.bubble.hidden = true;
     this._updateMeta();
     this._savePosition();
+    this.listen?.onScroll();
   }
   _toggleChrome() { document.body.classList.toggle('chrome-hidden'); }
   _updateMeta() {
@@ -379,9 +387,10 @@ export class Reader {
     const map = { 'font-family': 'font', 'line-height': 'lh', 'measure': 'measure', 'theme-seg': 'theme', 'justify': 'align' };
     for (const [id, key] of Object.entries(map)) $$('#' + id + ' button').forEach(b => b.classList.toggle('is-active', b.dataset.v === String(this.prefs[key])));
   }
-  togglePop() { this.typePop.hidden = !this.typePop.hidden; if (!this.typePop.hidden) { this.panel.hidden = true; this.closeEditor(); if (this.pending) this.hideBubble(); } this._syncScrim(); }
+  togglePop() { this.typePop.hidden = !this.typePop.hidden; if (!this.typePop.hidden) { this.panel.hidden = true; this.closeEditor(); this.listen?.closePop(); if (this.pending) this.hideBubble(); } this._syncScrim(); }
+  _closeSheets() { this.togglePanel(null); this.typePop.hidden = true; this.closeEditor(); this.listen?.closePop(); this._syncScrim(); }
   _syncScrim() {
-    this.scrim.hidden = !isMobile() || (this.panel.hidden && this.typePop.hidden && this.editor.hidden);
+    this.scrim.hidden = !isMobile() || (this.panel.hidden && this.typePop.hidden && this.editor.hidden && (!this.listen || this.listen.pop.hidden));
     // a toast left over from before a sheet opened would float over the sheet's fields
     if (!this.scrim.hidden) this.toast.hide?.();
   }
@@ -389,7 +398,7 @@ export class Reader {
   // ------------------------------------------------------------ panel
   togglePanel(tab, focusSearch = false) {
     if (tab === null || (!this.panel.hidden && this.activeTab === tab)) { this.panel.hidden = true; this._syncScrim(); return; }
-    this.panel.hidden = false; this.typePop.hidden = true; this.closeEditor();
+    this.panel.hidden = false; this.typePop.hidden = true; this.closeEditor(); this.listen?.closePop();
     // a pending long-press selection would float its bubble over the sheet (a desktop selection stays usable)
     if (this.pending) this.hideBubble();
     this.showPanelTab(tab);
@@ -508,6 +517,7 @@ export class Reader {
     if (y + bh > vr.height - 8) y = Math.max(8, r.top - vr.top - bh - 10);
     this.bubble.style.left = x + 'px'; this.bubble.style.top = y + 'px';
     document.body.classList.remove('chrome-hidden');
+    this.listen?.sync();
   }
 
   // Touch: Lipat runs the selection itself. The reading surface has user-select: none on coarse
@@ -661,7 +671,7 @@ export class Reader {
     for (const mk of this.pendingEls || []) { const p = mk.parentNode; if (!p) continue; while (mk.firstChild) p.insertBefore(mk.firstChild, mk); p.removeChild(mk); p.normalize(); }
     this.pending = null; this.pendingEls = null;
   }
-  hideBubble() { this.bubble.hidden = true; this._clearPending(); }
+  hideBubble() { this.bubble.hidden = true; this._clearPending(); this.listen?.sync(); }
 
   _selectionToMark() {
     const sel = window.getSelection();
@@ -760,7 +770,7 @@ export class Reader {
     $$('mark.hl.is-active', this.content).forEach(x => x.classList.remove('is-active'));
     $$(`mark.hl[data-id="${m.id}"]`, this.content).forEach(x => x.classList.add('is-active'));
     // position (desktop: popover near the mark; mobile: bottom sheet via CSS)
-    if (isMobile()) { this.editor.style.left = ''; this.editor.style.top = ''; this.panel.hidden = true; this.typePop.hidden = true; }
+    if (isMobile()) { this.editor.style.left = ''; this.editor.style.top = ''; this.panel.hidden = true; this.typePop.hidden = true; this.listen?.closePop(); }
     else {
       const vr = this.view.getBoundingClientRect();
       const r = anchorEl ? anchorEl.getBoundingClientRect() : { left: vr.width / 2, right: vr.width / 2, top: vr.height / 2, bottom: vr.height / 2 };
@@ -991,12 +1001,13 @@ export class Reader {
   _removeZoomCtl() { const z = $('#zoom-ctl'); if (z) z.remove(); }
 
   // ------------------------------------------------------------ keys
-  // something open over the page: the bubble, the mark editor, the Aa sheet or the panel
-  get hasLayer() { return !(this.bubble.hidden && this.editor.hidden && this.typePop.hidden && this.panel.hidden); }
+  // something open over the page: the bubble, the mark editor, the Aa or voice sheet, or the panel
+  get hasLayer() { return !(this.bubble.hidden && this.editor.hidden && this.typePop.hidden && this.panel.hidden && (!this.listen || this.listen.pop.hidden)); }
   // close the top one, the same order for Escape and system back
   dismiss() {
     if (!this.editor.hidden) this.closeEditor();
     else if (!this.typePop.hidden) { this.typePop.hidden = true; this._syncScrim(); }
+    else if (this.listen && !this.listen.pop.hidden) this.listen.closePop();
     else if (!this.panel.hidden) this.togglePanel(null);
     else if (!this.bubble.hidden) { this.hideBubble(); window.getSelection().removeAllRanges(); }
     else return false;
@@ -1025,6 +1036,7 @@ export class Reader {
       case 'c': case 'C': this.togglePanel('toc'); break;
       case 'm': case 'M': this.togglePanel('marks'); break;
       case 'a': case 'A': this.togglePop(); break;
+      case 'p': case 'P': this.listen?.toggle(); break;
       case 'l': case 'L': if (this.book.format === 'pdf') this.setPageMode(!this.pageMode); break;
       case 't': case 'T': { const order = ['paper', 'sepia', 'mist', 'night']; this.setPref('theme', order[(order.indexOf(this.prefs.theme) + 1) % order.length]); break; }
       case 'f': case 'F': this.togglePanel('search', true); ev.preventDefault(); break;

@@ -123,6 +123,7 @@
             <dt><kbd>1</kbd> to <kbd>5</kbd></dt><dd>React to the selection</dd>
             <dt><kbd>N</kbd></dt><dd>Keep the selection with a note</dd>
             <dt><kbd>B</kbd></dt><dd>Bookmark this spot</dd>
+            <dt><kbd>P</kbd></dt><dd>Listen, or pause</dd>
             <dt><kbd>C</kbd></dt><dd>Contents</dd>
             <dt><kbd>M</kbd></dt><dd>Marks in this book</dd>
             <dt><kbd>F</kbd></dt><dd>Find in book</dd>
@@ -174,6 +175,9 @@
       <button class="icon-btn" data-act="bookmark" title="Bookmark this spot (B)" aria-label="Bookmark">
         <i class="ph ph-bookmark-simple" aria-hidden="true"></i>
       </button>
+      <button class="icon-btn" data-act="listen" title="Listen (P)" aria-label="Listen" aria-pressed="false" hidden>
+        <i class="ph ph-headphones" aria-hidden="true"></i>
+      </button>
       <button class="icon-btn" data-act="type" title="Text settings (A)" aria-label="Text settings"><span class="aa">Aa</span></button>
     </div>
     <button class="icon-btn mobile-only" data-act="layout" title="Original layout" aria-label="Toggle original page layout" hidden>
@@ -203,6 +207,9 @@
       </button>
       <button class="icon-btn" data-act="bookmark" aria-label="Bookmark">
         <i class="ph ph-bookmark-simple" aria-hidden="true"></i>
+      </button>
+      <button class="icon-btn" data-act="listen" aria-label="Listen" aria-pressed="false" hidden>
+        <i class="ph ph-headphones" aria-hidden="true"></i>
       </button>
       <button class="icon-btn" data-act="type" aria-label="Text settings"><span class="aa">Aa</span></button>
     </div>
@@ -302,6 +309,29 @@
         <button data-v="justify">Justify</button>
       </div>
     </div>
+  </div>
+
+  <!-- read aloud: player, start-here chip, voice and speed -->
+  <div id="say-bar" class="say-bar" role="group" aria-label="Listening" hidden>
+    <button class="icon-btn" data-say="back" title="Previous sentence" aria-label="Previous sentence"><i class="ph-fill ph-skip-back" aria-hidden="true"></i></button>
+    <button class="say-play" data-say="play" title="Pause (P)" aria-label="Pause"><i class="ph-fill ph-pause" aria-hidden="true"></i></button>
+    <button class="icon-btn" data-say="next" title="Next sentence" aria-label="Next sentence"><i class="ph-fill ph-skip-forward" aria-hidden="true"></i></button>
+    <button class="say-rate" data-say="voice" title="Voice and speed" aria-label="Voice and speed"><span>1×</span></button>
+    <button class="icon-btn" data-say="stop" title="Stop listening" aria-label="Stop listening"><i class="ph ph-x" aria-hidden="true"></i></button>
+  </div>
+  <button id="say-here" class="say-here" hidden><i class="ph-fill ph-play" aria-hidden="true"></i>Read from here</button>
+  <div id="say-pop" class="pop say-pop sheet" role="dialog" aria-label="Voice and speed" hidden>
+    <div class="sheet-handle" aria-hidden="true"></div>
+    <label class="row"><span class="lbl">Language</span><select id="say-lang" class="input select"></select></label>
+    <label class="row"><span class="lbl">Voice</span><select id="say-voice" class="input select"></select></label>
+    <div class="row">
+      <span class="lbl">Speed</span>
+      <button class="step" data-rate="-0.1" aria-label="Slower"><i class="ph ph-minus" aria-hidden="true"></i></button>
+      <input id="say-rate" type="range" min="0.6" max="2.5" step="0.05" value="1" aria-label="Speed">
+      <button class="step" data-rate="0.1" aria-label="Faster"><i class="ph ph-plus" aria-hidden="true"></i></button>
+      <output id="say-rate-val" for="say-rate">1×</output>
+    </div>
+    <p id="say-hint" class="say-hint muted small-text"></p>
   </div>
 
   <div id="rd-loading" class="rd-loading" hidden><div class="spinner"></div><div class="rd-loading-text">Opening…</div></div>

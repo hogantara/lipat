@@ -38,7 +38,26 @@ Any other static HTTPS host works too, as long as its origin is added to the OAu
 - Table of contents, in-book search, page numbers for PDFs, progress, time left, position remembered.
 - Phone: bottom toolbar, bottom sheets, tap the page to hide or show the chrome, long-press a cover
   to remove a book. Desktop: keyboard (`← →` page, `+ −` size, `B` bookmark, `C` contents, `F` find,
-  `T` theme, `A` text settings, `Esc` back).
+  `T` theme, `A` text settings, `P` listen, `Esc` back).
+
+**Listening**
+- Every book can be read aloud, in every format. Tap the headphones (`P` on a keyboard). Lipat reads
+  from the top of the screen, or from a word you long-press or select, and highlights the sentence and
+  the word being spoken. The page follows the voice until you scroll away; then "Read from here"
+  starts it where you are.
+- Voices are the device's own (Web Speech API): free, offline once installed, in every language the
+  phone or browser speaks. Lipat picks the best one installed for the book's language. Natural,
+  premium and online voices come first, novelty and eSpeak voices last. The language comes from the
+  file, or from the text itself for PDF, Word and text files. Language, voice and speed (0.6× to 2.5×)
+  can be changed from the player.
+- The text is prepared for the ear: footnote numbers, page numbers, code and bullets are skipped, links
+  are read as their site name, headings and runs in capitals are not spelled out, and abbreviations
+  like "Mr.", "Jl." or "J. R. R." don't break a sentence. Each sentence is spoken whole so the voice
+  keeps its intonation.
+- Lock screen, notification and headset buttons play, pause and skip (Media Session).
+- For the most natural speech: on Android install voice data in Settings, Text-to-speech output; on
+  iPhone and Mac download an Enhanced or Premium voice in Accessibility, Spoken Content; on Windows,
+  Microsoft Edge has natural online voices built in.
 
 **Keeping**
 - Select text, tap a reaction: 💡 Aha · ❤️ Love · 🤔 Hmm · 😮 Whoa · 😤 Nope (keys `1`–`5`).
@@ -83,6 +102,7 @@ index.html            shell
 css/app.css           mobile-first styles, desktop overrides at ≥760px
 js/app.js             shelf, import, marks view, settings, Drive sync, PWA plumbing
 js/reader.js          reading surface, marks, sheets/panels, search, PDF page mode
+js/speech.js          read aloud: text for the ear, voice choice, player, highlight, Media Session
 js/formats.js         format detection + parsers (PDF reflow, EPUB, DOCX, MD, HTML, TXT)
 js/export.js          Markdown builders (book files, reaction files, index, download)
 js/drive.js           Google Drive client (GIS token flow, drive.file scope)
