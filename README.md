@@ -52,8 +52,7 @@ Any other static HTTPS host works too, as long as its origin is added to the OAu
     element, so it keeps reading with the screen off and shows lock-screen controls. A one-time 145 MB
     download from jsDelivr, checked against SHA-256 sums and kept in IndexedDB. It works ahead of the
     voice, uses up to four cores where the browser supports Document-Isolation-Policy (Chrome 137 and
-    later; the service worker asks for it), and runs the heavy denoising step on the graphics chip
-    (WebGPU) when a test sentence shows that is faster. It picks its quality (denoising steps, 5 to 8;
+    later; the service worker asks for it). It picks its quality (denoising steps, 5 to 8;
     below 5 it sounds hissy) from how fast the device is, and the voice settings say what it runs on
     and how fast. If the device can't keep up, the player says "Preparing the next sentence", waits
     until about 15 seconds are ready, and goes on by itself.
