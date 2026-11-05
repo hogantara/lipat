@@ -6,7 +6,7 @@ import { Drive, DriveError } from './drive.js';
 import { bookMarkdown, reactionMarkdown, indexMarkdown, allMarksMarkdown, safeName, REACTIONS } from './export.js';
 import { GOOGLE_CLIENT_ID, GOOGLE_API_KEY } from './config.js';
 import { audioStore } from './audio-store.js';
-export const BUILD = '2026-11-05.2';
+export const BUILD = '2026-11-05.3';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -249,7 +249,7 @@ function showLibTab(t) {
   $$('.libtab').forEach(p => p.classList.toggle('is-active', p.id === 'libtab-' + t));
   $('#lib-title').textContent = !isMobile() || t === 'shelf' ? 'Lipat' : t === 'marks' ? 'Marks' : 'Settings';
   if (t === 'marks') renderMarksTab();
-  if (t === 'settings') renderDriveStatus();
+  if (t === 'settings') { renderDriveStatus(); renderStorage(); }
 }
 
 // ------------------------------------------------------------ back navigation
@@ -509,7 +509,19 @@ function renderStorage() {
   const n = state.books.length;
   el.textContent = `${n} book${n === 1 ? '' : 's'} and ${state.marks.length} mark${state.marks.length === 1 ? '' : 's'} stored in this browser.`;
   if (navigator.storage?.estimate) navigator.storage.estimate().then(e => { if (e.usage) el.textContent += ` ${(e.usage / 1048576).toFixed(1)} MB used.`; });
+  // read-aloud speech made ahead (audio-store.js keeps it small on its own; this clears it)
+  audioStore.size().then(b => {
+    const info = $('#speech-info'), btn = $('#btn-clear-speech');
+    info.hidden = btn.hidden = !b;
+    info.textContent = `Read-aloud speech made ahead: ${b < 1048576 ? 'under 1' : Math.round(b / 1048576)} MB. Listened chapters, and books not opened for two weeks, are cleared on their own.`;
+  }).catch(() => {});
 }
+$('#btn-clear-speech').onclick = async () => {
+  if (!confirm('Clear all read-aloud speech made ahead? It is made again when you listen.')) return;
+  await audioStore.clear().catch(() => {});
+  renderStorage();
+  toast('Cleared');
+};
 
 // ------------------------------------------------------------ boot
 (async function boot() {
@@ -528,6 +540,7 @@ function renderStorage() {
   });
   initNav();
   await loadAll();
+  audioStore.tidy({ books: state.books }).catch(() => {}); // read-aloud speech: drop idle books, gone books, and too much
   renderDriveStatus();
   if ('serviceWorker' in navigator && location.protocol !== 'file:' && !new URLSearchParams(location.search).has('nosw')) navigator.serviceWorker.register('sw.js').catch(() => {});
   drainInbox();

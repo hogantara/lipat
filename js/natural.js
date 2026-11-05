@@ -219,6 +219,7 @@ export class NaturalVoice {
   _ckey(si) { return chapterKey(this.host.book(), `${this.model}:${this.host.voice()}:${this.host.lang()}`, si); }
   _keep() { const si = (this.items[this.at] || this.items[0])?.pos.si ?? this.next?.si ?? 0; return [this._ckey(si), this._ckey(si + 1)]; }
   _cached(chapter, hash) {
+    if (this.storeGen !== audioStore.gen) { this.metas.clear(); this.storeGen = audioStore.gen; } // something was deleted
     let m = this.metas.get(chapter);
     if (!m) { m = audioStore.chapter(chapter).catch(() => new Map()); this.metas.set(chapter, m); }
     return m.then(map => map.get(hash));
@@ -283,7 +284,7 @@ export class NaturalVoice {
   _url(it) {
     return it.urlP ||= (async () => {
       const clip = it.clip || await audioStore.get(it.key);
-      if (!clip) return null;
+      if (!clip) { it.missing = true; return null; }
       const { pcm, rate } = await decodeClip(clip);
       if (it.dropped) return null;
       return it.url = URL.createObjectURL(wavBlob(pcm, rate));
@@ -306,6 +307,8 @@ export class NaturalVoice {
     const tok = ++this.tok;
     this._url(it).then(url => {
       if (tok !== this.tok) return;
+      // deleted from the device since (Settings, or the size rule): make it again from here
+      if (!url && it.missing && this.playing) { this.play(it.pos, { fresh: true }); return; }
       if (!url) { this._advance(); return; }
       this._switchAt = performance.now();
       if (!this.audio.paused) this.audio.pause();

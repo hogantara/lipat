@@ -27,6 +27,7 @@ import { db } from './db.js';
 import { NaturalVoice } from './natural.js';
 import { SUPERTONIC_LANGS, SUPERTONIC_VOICES } from './supertonic.js';
 import { KOKORO_LANGS, KOKORO_VOICES, KOKORO_DEFAULT } from './kokoro.js';
+import { audioStore } from './audio-store.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -381,7 +382,7 @@ export class ReadAloud {
         speed: (sec, ms) => { if (mine()) this._tune(sec, ms); },
         // how fast this device made speech last time, so the first wait of a session is already the right length
         lastSpeed: () => this.prefs.speeds?.[model] || 0,
-        onStart: (pos) => { if (mine() && this.state === 'playing' && !same(pos, this.cur)) this._setCurrent(pos); },
+        onStart: (pos) => { if (!mine()) return; this._dropBehind(pos.si); if (this.state === 'playing' && !same(pos, this.cur)) this._setCurrent(pos); },
         onEnd: () => { if (mine()) this._finish(); },
         onChange: () => { this._ui(); if (!this.pop.hidden) this._renderPop(); },
         onPause: () => { if (mine() && this.state === 'playing') { this.state = 'paused'; this._ui(); } },
@@ -483,7 +484,7 @@ export class ReadAloud {
     if (this.r.book) this.prepareSoon();
   }
   // a new book: forget the old one's sentences and language
-  reset() { this.stop(); this.segs.clear(); this.key = null; this.detected = null; this.metaSid = null; }
+  reset() { this.stop(); this.segs.clear(); this.key = null; this.detected = null; this.metaSid = null; this._droppedTo = null; }
   // the book closed: free the natural voice's memory (it stays on the device)
   release() { clearTimeout(this._pt); for (const m of Object.values(this.models)) m.release(); }
   // Prepare ahead: with the natural voice chosen and on the device, make speech from where the reader is whenever the
@@ -497,6 +498,7 @@ export class ReadAloud {
     this._setup();
     const pos = this._visiblePos();
     if (!pos) return;
+    this._dropBehind(pos.si);
     this._releaseOthers();
     this.nat.prepare(pos);
     this.nat.load().catch(() => {});
@@ -673,8 +675,16 @@ export class ReadAloud {
   // joined to the one after. Its last section's index names it.
   _chapterEnd(si) {
     const n = this.r.book.sections.length;
-    while (si + 1 < n && this._segs(si).reduce((a, x) => a + x.text.length, 0) < 1500) si++;
+    while (si + 1 < n && this._short(si)) si++;
     return si;
+  }
+  _chapterStart(si) { while (si > 0 && this._short(si - 1)) si--; return si; }
+  _short(si) { return this._segs(si).reduce((a, x) => a + x.text.length, 0) < 1500; }
+  // Stored speech more than a chapter behind the reader, listening or reading, is deleted (audio-store.js): the
+  // chapter just finished stays, so going back is still instant.
+  _dropBehind(si) {
+    const start = this._chapterStart(si), keep = start > 0 ? this._chapterStart(start - 1) : 0;
+    if (keep > 0 && keep !== this._droppedTo) { this._droppedTo = keep; audioStore.behind(this.r.book.id, keep).catch(() => {}); }
   }
   _si(sid) { return this.r.book.sections.findIndex(s => s.id === sid); }
   _first(si) { for (; si >= 0 && si < this.r.book.sections.length; si++) if (this._segs(si).length) return { si, k: 0 }; return null; }

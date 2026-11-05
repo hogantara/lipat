@@ -70,8 +70,11 @@ Any other static HTTPS host works too, as long as its origin is added to the OAu
     16 MB per hour of listening; 16-bit PCM where the browser has no encoder). What was made while you
     read, while paused, or on another day plays at once, without loading the model. It makes at least
     20 minutes ahead and on to the end of the next chapter, up to 90 minutes, whenever a book is open
-    (not while the screen is off and nothing plays). Stored speech is capped at 400 MB, oldest chapters
-    first; removing a book or a voice removes its speech.
+    (not while the screen is off and nothing plays). So it never fills the device: speech more than a
+    chapter behind where you are (reading or listening) is deleted; a book not opened for two weeks, or
+    gone from the shelf, loses its speech; all of it stays under the smaller of 300 MB and a tenth of the
+    free space, oldest chapters first but never the one you are on or the next; removing a book or a
+    voice removes its speech. Settings, Storage shows the space it takes and can clear it.
   - A device that makes speech faster than it is read starts on the first sentence. A slower one waits
     once before a chapter, for exactly as long as it takes to have enough ready that the rest of the
     chapter is made before the voice gets there, then reads it through without a stop. The player says
