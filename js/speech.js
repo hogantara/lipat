@@ -370,11 +370,17 @@ export class ReadAloud {
     const host = (model) => {
       const mine = () => this.model === model;
       return {
-        seg: (pos) => this._seg(pos), after: (pos) => this._after(pos),
+        book: () => this.r.book?.id, seg: (pos) => this._seg(pos), after: (pos) => this._after(pos),
+        chapter: (si) => this._chapterEnd(si),
+        charsLeft: (pos) => {
+          let n = 0;
+          for (let si = pos.si, end = this._chapterEnd(pos.si); si <= end; si++) { const segs = this._segs(si); for (let k = si === pos.si ? pos.k : 0; k < segs.length; k++) n += segs[k].text.length; }
+          return n;
+        },
         lang: () => baseOf(this.lang), voice: () => model === 'kokoro' ? this.prefs.kokoro : this.prefs.natural, steps: () => this.prefs.steps,
         speed: (sec, ms) => { if (mine()) this._tune(sec, ms); },
-        // slower than the voice: gather a minute before going on, so the waits are rare
-        refill: () => this.speedSeen && this.speedSeen < this.prefs.rate * 1.05 ? 60 : 15,
+        // how fast this device made speech last time, so the first wait of a session is already the right length
+        lastSpeed: () => this.prefs.speeds?.[model] || 0,
         onStart: (pos) => { if (mine() && this.state === 'playing' && !same(pos, this.cur)) this._setCurrent(pos); },
         onEnd: () => { if (mine()) this._finish(); },
         onChange: () => { this._ui(); if (!this.pop.hidden) this._renderPop(); },
@@ -383,8 +389,8 @@ export class ReadAloud {
       };
     };
     this.models = {
-      kokoro: new NaturalVoice(host('kokoro'), 'kokoro-worker.js', 122),
-      supertonic: new NaturalVoice(host('supertonic'), 'voice-worker.js', 145),
+      kokoro: new NaturalVoice(host('kokoro'), 'kokoro-worker.js', 122, 'kokoro'),
+      supertonic: new NaturalVoice(host('supertonic'), 'voice-worker.js', 145, 'supertonic'),
     };
     // a mark or search hit wraps text under the highlight: point the highlight at the new nodes
     this.observer = new MutationObserver(() => { if (this.state !== 'off') this._paint(); });
@@ -577,6 +583,8 @@ export class ReadAloud {
     const rtf = sec * 1000 / ms, need = this.prefs.rate * 1.25;
     this.rtf = this.rtf ? this.rtf * 0.6 + rtf * 0.4 : rtf;
     this.speedSeen = this.rtf;
+    // remembered now and then for the next session's first wait
+    if ((this._madeN = (this._madeN || 0) + 1) % 10 === 0) { this.prefs.speeds = { ...this.prefs.speeds, [this.model]: Math.round(this.nat.speed * 100) / 100 }; this._save(); }
     if (this.model !== 'supertonic') return; // Kokoro has no steps to trade
     let s = this.prefs.steps;
     // below 5 steps the voice turns hissy and broken: never go there
@@ -661,6 +669,13 @@ export class ReadAloud {
     return segs;
   }
   _seg(p) { return p && this._segs(p.si)[p.k]; }
+  // A chapter for the natural voice's one wait: a section, with short ones (a title page, an epigraph, a part title)
+  // joined to the one after. Its last section's index names it.
+  _chapterEnd(si) {
+    const n = this.r.book.sections.length;
+    while (si + 1 < n && this._segs(si).reduce((a, x) => a + x.text.length, 0) < 1500) si++;
+    return si;
+  }
   _si(sid) { return this.r.book.sections.findIndex(s => s.id === sid); }
   _first(si) { for (; si >= 0 && si < this.r.book.sections.length; si++) if (this._segs(si).length) return { si, k: 0 }; return null; }
   _after(p) { return p.k + 1 < this._segs(p.si).length ? { si: p.si, k: p.k + 1 } : this._first(p.si + 1); }
@@ -884,10 +899,16 @@ export class ReadAloud {
   _statusText() {
     const n = this.engine === 'natural' && this.nat;
     if (n && n.status === 'downloading') return `Downloading the natural voice, ${Math.floor(n.progress * 100)}%`;
-    if (n && this.state === 'playing' && n.status !== 'ready') return n.status === 'failed' ? "The natural voice didn't load" : 'Getting the natural voice ready';
+    // what was made before plays while the model is still loading
+    if (n && this.state === 'playing' && n.waiting && n.status !== 'ready') return n.status === 'failed' ? "The natural voice didn't load" : 'Getting the natural voice ready';
     if (this.ended) return 'End of the book';
     if (this.state === 'paused') return 'Paused';
-    if (n && n.waiting) return n.at < 0 ? 'Preparing the first sentence' : `Preparing the next part, ${Math.min(99, Math.floor(n.ready / n.target * 100))}%`;
+    if (n && n.waiting) {
+      // one wait before a chapter, as long as it takes to read the chapter through
+      const eta = n.eta, what = n.at < 0 ? 'Preparing the chapter' : n.atChapter ? 'Preparing the next chapter' : 'Preparing the next part';
+      if (!eta) return n.at < 0 ? 'Preparing the first sentence' : what;
+      return eta < 60 ? `${what}, under a minute left` : `${what}, about ${Math.round(eta / 60)} min left`;
+    }
     return 'Reading';
   }
   _ui() {
@@ -898,14 +919,16 @@ export class ReadAloud {
     pb.innerHTML = `<i class="ph-fill ph-${playing ? 'pause' : 'play'}" aria-hidden="true"></i>`;
     pb.setAttribute('aria-label', playing ? 'Pause' : 'Play'); pb.title = `${playing ? 'Pause' : 'Play'} (P)`;
     if (on) {
-      const n = this.engine === 'natural' && this.nat, busy = n && playing && (n.status !== 'ready' || n.waiting);
+      const n = this.engine === 'natural' && this.nat, busy = n && playing && n.waiting;
       $('.say-state', this.bar).textContent = this._statusText();
       const sec = this.cur && this.r.book.sections[this.cur.si];
       $('.say-where', this.bar).textContent = sec ? (this.r.book.sectionTitles?.[sec.id] || sec.title || '').trim() : '';
       this.bar.classList.toggle('is-busy', !!busy);
       const meter = $('.say-meter', this.bar);
-      meter.hidden = !(n && n.status === 'downloading');
-      meter.firstElementChild.style.width = n ? `${Math.round(n.progress * 100)}%` : '0';
+      // the download, or a chapter's wait
+      const share = n && (n.status === 'downloading' ? n.progress : n.waitShare);
+      meter.hidden = share == null || share === false;
+      meter.firstElementChild.style.width = `${Math.round((share || 0) * 100)}%`;
       const rate = $('[data-say="rate"]', this.bar);
       rate.textContent = fmtRate(this.prefs.rate); rate.setAttribute('aria-label', `Speed ${fmtRate(this.prefs.rate)}. Change speed`);
     }

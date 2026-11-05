@@ -8,6 +8,7 @@
 // executed. ONNX Runtime and the eSpeak NG phonemizer are libraries from jsDelivr, at pinned versions.
 import { Kokoro, KOKORO_VOICES } from './kokoro.js';
 import { voiceStore, sha256 } from './voice-store.js';
+import { encodeClip } from './clip.js';
 
 const ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
 const PHONEMIZER = 'https://cdn.jsdelivr.net/npm/phonemizer@1.2.1/dist/phonemizer.js';
@@ -106,9 +107,8 @@ self.onmessage = (ev) => {
       try {
         const t = performance.now();
         const { wav, sampleRate } = await tts.speak(m.text, { voice: m.voice });
-        const pcm = new Int16Array(wav.length);
-        for (let i = 0; i < wav.length; i++) pcm[i] = Math.max(-1, Math.min(1, wav[i])) * 32767;
-        post({ t: 'audio', id: m.id, pcm, sampleRate, ms: performance.now() - t }, [pcm.buffer]);
+        const ms = performance.now() - t, clip = await encodeClip(wav, sampleRate);
+        post({ t: 'audio', id: m.id, clip, ms }, clip ? (clip.pcm ? [clip.pcm.buffer] : clip.chunks.map(c => c.buffer)) : []);
       } catch (e) { post({ t: 'failed', id: m.id, message: String(e && e.message || e) }); }
     });
   } else if (m.t === 'forget') {
