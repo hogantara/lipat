@@ -65,12 +65,23 @@ Any other static HTTPS host works too, as long as its origin is added to the OAu
     voice, uses up to four cores where the browser supports Document-Isolation-Policy (Chrome 137 and
     later; the service worker asks for it). Supertonic picks its quality (denoising steps, 5 to 8;
     below 5 it sounds hissy) from how fast the device is, and the voice settings say what it runs on
-    and how fast. If the device can't keep up, the player says "Preparing the next part" with how far
-    along it is, gathers about a minute of speech (15 seconds on a device that keeps up), and goes on
-    by itself: a rare wait instead of one every few sentences. Once it is on the device it also prepares
-    ahead whenever a book is open, from where you are, up to 20 minutes, even before you press play and
-    while paused (not while the screen is off and nothing plays). So on a slow device a few minutes of
-    reading first give a long stretch of listening without a stop.
+    and how fast.
+  - Speech is made chapter by chapter and kept on the device, Opus-compressed through WebCodecs (about
+    16 MB per hour of listening; 16-bit PCM where the browser has no encoder). What was made while you
+    read, while paused, or on another day plays at once, without loading the model. It makes at least
+    20 minutes ahead and on to the end of the next chapter, up to 90 minutes, whenever a book is open
+    (not while the screen is off and nothing plays). So it never fills the device: speech more than a
+    chapter behind where you are (reading or listening) is deleted; a book not opened for two weeks, or
+    gone from the shelf, loses its speech; all of it stays under the smaller of 300 MB and a tenth of the
+    free space, oldest chapters first but never the one you are on or the next; removing a book or a
+    voice removes its speech. Settings, Storage shows the space it takes and can clear it.
+  - A device that makes speech faster than it is read starts on the first sentence. A slower one waits
+    once before a chapter, for exactly as long as it takes to have enough ready that the rest of the
+    chapter is made before the voice gets there, then reads it through without a stop. The player says
+    "Preparing the chapter, about 4 min left" with a progress bar. The wait is (what is left of the
+    chapter) × (1 − speed ÷ reading rate), from the speed this device showed last time, and counts
+    what is already stored. Short sections (a title page, an epigraph) join the chapter after them, and
+    a chapter longer than 30 minutes is planned 30 minutes at a time.
   - **Device**: the system's own voices (Web Speech API). Instant and in every language the device speaks,
     but Android stops it when the screen turns off. Lipat picks the best installed voice for the book's
     language. Used automatically for languages the natural voice doesn't speak.
@@ -132,6 +143,8 @@ js/supertonic.js      Supertonic 3 inference (port of the reference web helper)
 js/kokoro-worker.js   Kokoro worker: download from Hugging Face, checksums, IndexedDB, ONNX Runtime
 js/kokoro.js          Kokoro 82M inference: text normalising and phonemes (ported from kokoro-js), tokens
 js/voice-store.js     IndexedDB store for both voices' files
+js/clip.js            one sentence of speech as stored: Opus via WebCodecs, or PCM
+js/audio-store.js     the speech made so far, per book, voice and chapter, with a size cap
 js/formats.js         format detection + parsers (PDF reflow, EPUB, DOCX, MD, HTML, TXT)
 js/export.js          Markdown builders (book files, reaction files, index, download)
 js/drive.js           Google Drive client (GIS token flow, drive.file scope)

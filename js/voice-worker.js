@@ -7,9 +7,10 @@
 //
 // Messages in:  { t: 'check' } { t: 'load' } { t: 'speak', id, text, lang, voice, steps } { t: 'forget' }
 // Messages out: { t: 'checked', cached } { t: 'progress', done, total } { t: 'preparing' } { t: 'ready' }
-//               { t: 'audio', id, pcm (Int16Array), sampleRate, ms } { t: 'failed', id?, message } { t: 'forgotten' }
+//               { t: 'audio', id, clip (clip.js, null for no sound), ms } { t: 'failed', id?, message } { t: 'forgotten' }
 import { Supertonic } from './supertonic.js';
 import { voiceStore, sha256 } from './voice-store.js';
+import { encodeClip } from './clip.js';
 
 const ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
 const CDN = 'https://cdn.jsdelivr.net/npm/';
@@ -127,9 +128,8 @@ self.onmessage = (ev) => {
       try {
         const t = performance.now();
         const { wav, sampleRate } = await tts.speak(m.text, m.lang, { voice: m.voice, steps: m.steps });
-        const pcm = new Int16Array(wav.length);
-        for (let i = 0; i < wav.length; i++) pcm[i] = Math.max(-1, Math.min(1, wav[i])) * 32767;
-        post({ t: 'audio', id: m.id, pcm, sampleRate, ms: performance.now() - t }, [pcm.buffer]);
+        const ms = performance.now() - t, clip = await encodeClip(wav, sampleRate);
+        post({ t: 'audio', id: m.id, clip, ms }, clip ? (clip.pcm ? [clip.pcm.buffer] : clip.chunks.map(c => c.buffer)) : []);
       } catch (e) { post({ t: 'failed', id: m.id, message: String(e && e.message || e) }); }
     });
   } else if (m.t === 'forget') {

@@ -1,16 +1,25 @@
 // A natural voice, page side. Its speech worker (voice-worker.js for Supertonic, kokoro-worker.js for Kokoro) makes one
-// sentence at a time, up to twenty minutes ahead of the voice; the page plays them through one <audio> element. Chrome
-// keeps an audio element playing with the screen off and gives it lock-screen controls, which Android's built-in speech
-// engine does not get.
+// sentence at a time; the page plays them through one <audio> element. Chrome keeps an audio element playing with the
+// screen off and gives it lock-screen controls, which Android's built-in speech engine does not get.
 //
-// Positions are ReadAloud's { si, k }. The host supplies the sentences and hears what happens:
-// { seg(pos), after(pos), lang(), voice(), steps(), speed(seconds, ms), onStart(pos), onEnd(), onChange(), onPause(), onFail(message) }
+// Speech is made chapter by chapter and kept on the device (audio-store.js), so what was made while reading, while
+// paused, or days ago plays at once, without even loading the model. It makes ahead at least twenty minutes and on to
+// the end of the next chapter. When the device makes speech slower than it is read, the voice doesn't stop every few
+// sentences: before a chapter it waits once, for as long as it takes to have enough ready that the rest of the chapter
+// is made before the voice gets there (see _target), and then reads it through.
+//
+// Positions are ReadAloud's { si, k }. The host supplies the sentences and hears what happens: { book(), seg(pos),
+// after(pos), chapter(si) (which chapter a section is in), charsLeft(pos) (to the end of its chapter), lang(), voice(),
+// steps(), speed(seconds, ms), lastSpeed(), onStart(pos), onEnd(), onChange(), onPause(), onFail(message) }
+import { audioStore, textHash, chapterKey } from './audio-store.js';
+import { decodeClip, clipSeconds } from './clip.js';
 
-const AHEAD_SECONDS = 1200;  // generated ahead of the voice: twenty minutes, so a device slower than the voice can get ahead
-const HISTORY = 5;           // sentences kept behind it, so going back is instant
-// After running dry, seconds to have ready before going on: one wait instead of one per sentence. The host can ask for
-// more when the device makes speech slower than it is read (host.refill()).
-const REFILL = 15;
+const AHEAD_MIN = 1200;  // made ahead of the voice: at least twenty minutes, and on to the end of the next chapter,
+const AHEAD_MAX = 5400;  // but no more than ninety minutes
+const SPAN = 1800;       // a head start covers at most half an hour: a book without chapters waits again after that
+const HISTORY = 5;       // sentences kept behind the voice, so going back is instant
+const REFILL = 15;       // run dry on a device that keeps up: seconds to gather before going on
+const SPC = 1 / 14;      // seconds of speech per character, until the voice has said some
 const same = (a, b) => !!a && !!b && a.si === b.si && a.k === b.k;
 
 function wavBlob(pcm, rate) {
@@ -22,18 +31,21 @@ function wavBlob(pcm, rate) {
 }
 
 export class NaturalVoice {
-  // worker: the speech worker's file name in js/; mb: its one-time download
-  constructor(host, worker, mb) {
-    this.host = host; this.workerFile = worker; this.mb = mb;
+  // worker: the speech worker's file name in js/; mb: its one-time download; model: its name in the stored audio's keys
+  constructor(host, worker, mb, model) {
+    this.host = host; this.workerFile = worker; this.mb = mb; this.model = model;
     this.status = 'unknown';   // unknown | absent | stored | downloading | preparing | ready | failed
     this.progress = 0;         // share downloaded, 0 to 1
-    this.items = [];           // generated sentences in reading order: { pos, url, dur }
+    this.items = [];           // sentences ready, in reading order: { pos, key, dur, clip?, url? }
     this.at = -1;              // index of the sentence playing or paused on
-    this.next = null;          // the next sentence to generate
-    this.pending = null;       // the request the worker is on
+    this.next = null;          // the next sentence to make
+    this.pending = null;       // the sentence being looked up or made
+    this.requests = new Map(); // worker requests: id -> { key, chapter, chars }
+    this.metas = new Map();    // chapter key -> Promise of Map(text hash -> seconds) of what is stored
     this.playing = false;      // the reader wants sound
-    this.waiting = false;      // ...but the next sentence isn't made yet
-    this.rate = 1; this.reqId = 0;
+    this.waiting = false;      // ...but not enough is ready yet
+    this.rate = 1; this.reqId = 0; this.tok = 0;
+    this.secs = 0; this.chars = 0; this._speed = 0; this.made = 0; // measured: seconds per character, and speed
     // making speech ahead stops while the page is hidden and silent, and goes on when it shows again
     document.addEventListener('visibilitychange', () => this._pump());
     const a = this.audio = new Audio();
@@ -82,6 +94,9 @@ export class NaturalVoice {
   // Delete the model from this device.
   forget() {
     this.stop();
+    // and the speech it made
+    this.metas.clear();
+    audioStore.forget({ voice: this.model + ':' }).catch(() => {});
     // a fresh worker deletes the files: one still loading or downloading would carry on and say it is ready
     if (this.w) { this.w.terminate(); this.w = null; }
     this._worker().postMessage({ t: 'forget' });
@@ -91,6 +106,7 @@ export class NaturalVoice {
   release() {
     this.stop();
     if (this.w) { this.w.terminate(); this.w = null; }
+    this.requests.clear();
     if (this.status === 'ready' || this.status === 'preparing') this.status = 'stored';
     // a download cut short: what is stored is asked again next time (load() goes on from the files it has)
     if (this.status === 'downloading') { this.status = 'unknown'; this.progress = 0; }
@@ -104,7 +120,7 @@ export class NaturalVoice {
       case 'ready': this.status = 'ready'; this.progress = 1; this._loaded?.(); this._pump(); break;
       case 'audio': this._made(m); return;
       case 'failed':
-        if (m.id != null) { this._made({ ...m, pcm: null }); return; }
+        if (m.id != null) { this._made({ ...m, clip: null }); return; }
         this.status = 'failed'; this.error = m.message; this._loading = null; this._failed?.(new Error(m.message));
         this.host.onFail(m.message);
         break;
@@ -119,11 +135,10 @@ export class NaturalVoice {
   play(pos, { fresh = false } = {}) {
     this.playing = true;
     const i = fresh ? -1 : this.items.findIndex(x => same(x.pos, pos));
-    if (i >= 0) { this._playAt(i); return; }
-    this._clear();
-    this.next = pos; this.waiting = true;
-    this.host.onChange();
-    this._pump();
+    if (i < 0) { this._clear(); this.next = pos; } else this.at = i - 1;
+    this.waiting = true;
+    this._check();
+    if (this.waiting) { this.host.onChange(); this._pump(); }
   }
   // Make speech from pos without playing it, so a later play(pos) starts at once.
   prepare(pos) {
@@ -138,71 +153,174 @@ export class NaturalVoice {
     if (!this.audio.paused) this.audio.pause();
   }
   // Go on mid-sentence, when paused on pos.
-  canResume(pos) { return !this.waiting && this.at >= 0 && same(this.items[this.at]?.pos, pos); }
+  canResume(pos) { return !this.waiting && this.at >= 0 && same(this.items[this.at]?.pos, pos) && !!this.audio.getAttribute('src'); }
   resume() { this.playing = true; this.audio.play().catch(() => {}); }
   stop() { this.playing = false; this._clear(); }
   setRate(r) { this.rate = r; this.audio.defaultPlaybackRate = this.audio.playbackRate = r; }
   // how far into the current sentence, in seconds of its audio
   get elapsed() { return this.audio.currentTime || 0; }
-  // seconds of speech made ahead of the voice, and how much a wait gathers before going on
-  get ready() { return this.items.slice(this.at + 1).reduce((n, x) => n + x.dur, 0); }
-  get target() { return (this.host.refill?.() || REFILL) * this.rate; }
-
-  _clear() {
-    this._switchAt = performance.now();
-    if (!this.audio.paused) this.audio.pause();
-    this.audio.removeAttribute('src');
-    for (const x of this.items) if (x.url) URL.revokeObjectURL(x.url);
-    this.items = []; this.at = -1; this.next = null; this.pending = null; this.waiting = false;
+  // seconds of speech ready from item i on, and ahead of the voice
+  readyFrom(i) { let n = 0; for (let j = Math.max(0, i); j < this.items.length; j++) n += this.items[j].dur; return n; }
+  get ready() { return this.readyFrom(this.at + 1); }
+  // speech made per second of work (1 keeps up with the voice at 1x), learnt on this device
+  get speed() { return this._speed || this.host.lastSpeed?.() || 0; }
+  get spc() { return this.chars > 300 ? this.secs / this.chars : SPC; }
+  // While waiting: seconds until enough is ready (0 when it is a matter of the next sentence, null when not yet known).
+  get eta() {
+    if (!this.waiting) return 0;
+    const n = this.at + 1, pos = this.items[n]?.pos || this.next, v = this.speed;
+    if (!pos) return 0;
+    if (!v) return null;
+    const need = this._target(pos, this.at < 0) - this.readyFrom(n);
+    return need > 0 ? need / v : 0;
   }
+  // how much of a long wait is done, 0 to 1 (null when there is no long wait)
+  get waitShare() {
+    if (!this.waiting || !(this.eta > 30)) return null;
+    const n = this.at + 1, pos = this.items[n]?.pos || this.next;
+    return Math.min(1, this.readyFrom(n) / this._target(pos, this.at < 0));
+  }
+  // the voice is waiting to go into a new chapter
+  get atChapter() {
+    const cur = this.items[this.at]?.pos, nx = this.items[this.at + 1]?.pos || this.next;
+    return !!cur && !!nx && this.host.chapter(cur.si) !== this.host.chapter(nx.si);
+  }
+
+  // Seconds of speech to have ready from pos before going on, so that the voice then reads to the end of pos's chapter
+  // (or the next SPAN of it) without stopping. Speech is used up at the reading rate and made at this.speed, so over
+  // what is left of the chapter the shortfall is rest * (1 - speed / rate): that much has to be ready first. A device
+  // that keeps up needs none: it starts on the first sentence. Not knowing the speed yet (the first time on this
+  // device), it waits for the first sentence the worker makes, which tells.
+  _target(pos, start) {
+    const r = this.rate, v = this.speed, rest = Math.min(SPAN, this.host.charsLeft(pos) * this.spc);
+    if (!v) return start ? rest : REFILL * r;
+    if (v >= r * 1.1) return start ? 0 : Math.min(rest, REFILL * r);
+    return Math.min(rest, rest * (1 - v / r) * 1.15 + 5 * r);
+  }
+  // waiting: go on once enough is ready
+  _check() {
+    const n = this.at + 1, it = this.items[n];
+    if (!it) {
+      if (!this.next && !this.pending && this.at >= 0) { this.playing = false; this.waiting = false; this.host.onEnd(); }
+      return;
+    }
+    if (!this.next || this.readyFrom(n) >= this._target(it.pos, this.at < 0)) this._playAt(n);
+  }
+  _advance() {
+    if (!this.playing) return;
+    const n = this.at + 1, it = this.items[n], cur = this.items[this.at];
+    // within a chapter, on at once; into a new one, once enough of it is ready to read it through
+    if (it && (!cur || this.host.chapter(it.pos.si) === this.host.chapter(cur.pos.si))) { this._playAt(n); return; }
+    this.waiting = true;
+    this._check();
+    if (this.waiting) { this.host.onChange(); this._pump(); }
+  }
+
+  _ckey(si) { return chapterKey(this.host.book(), `${this.model}:${this.host.voice()}:${this.host.lang()}`, si); }
+  _keep() { const si = (this.items[this.at] || this.items[0])?.pos.si ?? this.next?.si ?? 0; return [this._ckey(si), this._ckey(si + 1)]; }
+  _cached(chapter, hash) {
+    if (this.storeGen !== audioStore.gen) { this.metas.clear(); this.storeGen = audioStore.gen; } // something was deleted
+    let m = this.metas.get(chapter);
+    if (!m) { m = audioStore.chapter(chapter).catch(() => new Map()); this.metas.set(chapter, m); }
+    return m.then(map => map.get(hash));
+  }
+  // enough made ahead (not while the voice waits for it)
+  _full() {
+    if (this.waiting) return false;
+    const ahead = this.ready, base = (this.items[this.at] || this.items[0])?.pos || this.next;
+    return ahead >= AHEAD_MAX || (ahead >= AHEAD_MIN && this.next.si > this.host.chapter(this.host.chapter(base.si) + 1));
+  }
+  // the next sentence: from the device when it was made before, else from the worker
   _pump() {
-    if (this.pending || !this.next || this.status !== 'ready') return;
+    if (this.pending || !this.next || !this.host.book()) return;
     if (!this.playing && document.hidden) return;
-    const ahead = this.items.slice(this.at + 1).reduce((n, x) => n + x.dur, 0);
-    if (ahead > AHEAD_SECONDS && !this.waiting) return;
+    if (this._full()) return;
     const pos = this.next, s = this.host.seg(pos);
     if (!s) { this.next = null; return; }
-    this.pending = { id: ++this.reqId, pos, at: performance.now() };
-    this._worker().postMessage({ t: 'speak', id: this.reqId, text: s.text, lang: this.host.lang(), voice: this.host.voice(), steps: this.host.steps() });
+    const id = ++this.reqId, chapter = this._ckey(pos.si), hash = textHash(s.text), key = chapter + hash, chars = s.text.length;
+    this.pending = { id, pos, key, chars };
+    this._cached(chapter, hash).then(dur => {
+      if (this.pending?.id !== id) return;
+      if (dur != null) { this.pending = null; this._add(pos, key, dur, chars, null); return; }
+      if (this.status !== 'ready') { this.pending = null; return; } // made once the model is ready ('ready' pumps)
+      this.requests.set(id, { key, chapter, hash, chars });
+      this._worker().postMessage({ t: 'speak', id, text: s.text, lang: this.host.lang(), voice: this.host.voice(), steps: this.host.steps() });
+    });
   }
   _made(m) {
+    const req = this.requests.get(m.id), clip = m.clip;
+    this.requests.delete(m.id);
+    let saved = null;
+    if (clip && req) {
+      // kept even when the reader has moved on: it is this sentence in this voice
+      const dur = clipSeconds(clip);
+      saved = audioStore.put(req.key, clip, this._keep()).catch(() => {});
+      this.metas.get(req.chapter)?.then(map => map.set(req.hash, dur));
+      // an average over the first ten sentences, then a slow one, so the wait it predicts doesn't jump about
+      const v = dur * 1000 / m.ms, w = Math.max(0.1, 1 / ++this.made);
+      this._speed = this._speed ? this._speed * (1 - w) + v * w : v;
+      this.host.speed(dur, m.ms);
+    }
     const p = this.pending;
     if (!p || p.id !== m.id) return; // made for a place the reader has left
     this.pending = null;
     // no audio (a failure, or nothing to say): skipped when its turn comes
-    const pcm = m.pcm && m.pcm.length ? m.pcm : null, dur = pcm ? pcm.length / m.sampleRate : 0;
-    if (pcm) this.host.speed(dur, m.ms);
-    this.items.push({ pos: p.pos, url: pcm ? URL.createObjectURL(wavBlob(pcm, m.sampleRate)) : null, dur });
-    this.next = this.host.after(p.pos);
-    // waiting: go on once enough is ready (all of it at the start of a reading, so it starts at once)
-    const ready = this.ready;
-    if (this.waiting && this.playing && this.items[this.at + 1] && (this.at < 0 || ready >= this.target || !this.next)) this._playAt(this.at + 1);
-    else if (this.waiting && !this.next && this.playing) this._advance();
-    else if (this.waiting) this.host.onChange(); // how much of the wait is done
+    const it = this._add(p.pos, clip ? p.key : null, clip ? clipSeconds(clip) : 0, p.chars, clip);
+    saved?.then(() => { it.clip = null; }); // from now on read back from the device, so memory holds only what plays
+  }
+  _add(pos, key, dur, chars, clip) {
+    const it = { pos, key, dur, clip };
+    this.items.push(it);
+    if (dur) { this.secs += dur; this.chars += chars; }
+    this.next = this.host.after(pos);
+    if (this.waiting && this.playing) {
+      this._check();
+      if (this.waiting) this.host.onChange(); // how much of the wait is done
+    }
     this._pump();
+    return it;
+  }
+  // the sentence as a WAV the audio element can play
+  _url(it) {
+    return it.urlP ||= (async () => {
+      const clip = it.clip || await audioStore.get(it.key);
+      if (!clip) { it.missing = true; return null; }
+      const { pcm, rate } = await decodeClip(clip);
+      if (it.dropped) return null;
+      return it.url = URL.createObjectURL(wavBlob(pcm, rate));
+    })().catch(() => null);
+  }
+  _drop(x) { x.dropped = true; if (x.url) URL.revokeObjectURL(x.url); x.url = null; }
+  _clear() {
+    this.tok++;
+    this._switchAt = performance.now();
+    if (!this.audio.paused) this.audio.pause();
+    this.audio.removeAttribute('src');
+    for (const x of this.items) this._drop(x);
+    this.items = []; this.at = -1; this.next = null; this.pending = null; this.waiting = false;
   }
   _playAt(i) {
     const it = this.items[i];
     if (!it) return;
     this.at = i; this.waiting = false;
-    if (!it.url) { this._advance(); return; } // a sentence the model could not make: skip it
-    this._switchAt = performance.now();
-    if (!this.audio.paused) this.audio.pause();
-    this.audio.src = it.url;
-    this.audio.defaultPlaybackRate = this.audio.playbackRate = this.rate;
-    if (this.playing) this.audio.play().catch(() => {});
+    if (!it.key) { this._advance(); return; } // a sentence the model could not make: skip it
+    const tok = ++this.tok;
+    this._url(it).then(url => {
+      if (tok !== this.tok) return;
+      // deleted from the device since (Settings, or the size rule): make it again from here
+      if (!url && it.missing && this.playing) { this.play(it.pos, { fresh: true }); return; }
+      if (!url) { this._advance(); return; }
+      this._switchAt = performance.now();
+      if (!this.audio.paused) this.audio.pause();
+      this.audio.src = url;
+      this.audio.defaultPlaybackRate = this.audio.playbackRate = this.rate;
+      if (this.playing) this.audio.play().catch(() => {});
+    });
+    // the next two are decoded ahead, so there is no gap between sentences
+    for (const x of this.items.slice(i + 1, i + 3)) if (x.key) this._url(x);
     // drop what is far behind
-    while (this.at > HISTORY) { const x = this.items.shift(); if (x.url) URL.revokeObjectURL(x.url); this.at--; }
+    while (this.at > HISTORY) { this._drop(this.items.shift()); this.at--; }
     this.host.onStart(it.pos);
-    this.host.onChange();
-    this._pump();
-  }
-  _advance() {
-    if (!this.playing) return;
-    const n = this.at + 1;
-    if (this.items[n]) { this._playAt(n); return; }
-    if (!this.next && !this.pending) { this.playing = false; this.host.onEnd(); return; }
-    this.waiting = true;
     this.host.onChange();
     this._pump();
   }
