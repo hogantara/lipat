@@ -1,11 +1,11 @@
-// The natural voice, page side. The speech worker (voice-worker.js) makes one sentence at a time, up to four minutes
-// ahead of the voice; the page plays them through one <audio> element. Chrome keeps an audio element playing with the
-// screen off and gives it lock-screen controls, which Android's built-in speech engine does not get.
+// A natural voice, page side. Its speech worker (voice-worker.js for Supertonic, kokoro-worker.js for Kokoro) makes one
+// sentence at a time, up to twenty minutes ahead of the voice; the page plays them through one <audio> element. Chrome
+// keeps an audio element playing with the screen off and gives it lock-screen controls, which Android's built-in speech
+// engine does not get.
 //
 // Positions are ReadAloud's { si, k }. The host supplies the sentences and hears what happens:
 // { seg(pos), after(pos), lang(), voice(), steps(), speed(seconds, ms), onStart(pos), onEnd(), onChange(), onPause(), onFail(message) }
 
-export const NATURAL_MB = 145;
 const AHEAD_SECONDS = 1200;  // generated ahead of the voice: twenty minutes, so a device slower than the voice can get ahead
 const HISTORY = 5;           // sentences kept behind it, so going back is instant
 // After running dry, seconds to have ready before going on: one wait instead of one per sentence. The host can ask for
@@ -22,8 +22,9 @@ function wavBlob(pcm, rate) {
 }
 
 export class NaturalVoice {
-  constructor(host) {
-    this.host = host;
+  // worker: the speech worker's file name in js/; mb: its one-time download
+  constructor(host, worker, mb) {
+    this.host = host; this.workerFile = worker; this.mb = mb;
     this.status = 'unknown';   // unknown | absent | stored | downloading | preparing | ready | failed
     this.progress = 0;         // share downloaded, 0 to 1
     this.items = [];           // generated sentences in reading order: { pos, url, dur }
@@ -53,7 +54,7 @@ export class NaturalVoice {
   // ---------------------------------------------------------- the worker and the model
   _worker() {
     if (!this.w) {
-      this.w = new Worker(new URL('./voice-worker.js', import.meta.url), { type: 'module' });
+      this.w = new Worker(new URL('./' + this.workerFile, import.meta.url), { type: 'module' });
       this.w.onmessage = (e) => this._msg(e.data);
       this.w.onerror = (e) => this._msg({ t: 'failed', message: e.message || 'The voice could not start.' });
     }
@@ -62,7 +63,10 @@ export class NaturalVoice {
   // Is the model on this device? Sets status to stored or absent.
   check() {
     if (this.status !== 'unknown') return Promise.resolve(this.status !== 'absent');
-    return new Promise(res => { this._checked = res; this._worker().postMessage({ t: 'check' }); });
+    return this._checking ||= new Promise(res => {
+      this._checked = (c) => { this._checking = null; res(c); };
+      this._worker().postMessage({ t: 'check' });
+    });
   }
   // Download if needed, then load it. Resolves when it can speak.
   load() {
@@ -78,15 +82,19 @@ export class NaturalVoice {
   // Delete the model from this device.
   forget() {
     this.stop();
-    if (this.w) { this.w.postMessage({ t: 'forget' }); }
-    this.status = 'absent'; this._loading = null;
+    // a fresh worker deletes the files: one still loading or downloading would carry on and say it is ready
+    if (this.w) { this.w.terminate(); this.w = null; }
+    this._worker().postMessage({ t: 'forget' });
+    this.status = 'absent'; this._loading = null; this._checking = null;
   }
   // Free the model's memory; it stays stored.
   release() {
     this.stop();
     if (this.w) { this.w.terminate(); this.w = null; }
     if (this.status === 'ready' || this.status === 'preparing') this.status = 'stored';
-    this._loading = null;
+    // a download cut short: what is stored is asked again next time (load() goes on from the files it has)
+    if (this.status === 'downloading') { this.status = 'unknown'; this.progress = 0; }
+    this._loading = null; this._checking = null;
   }
   _msg(m) {
     switch (m.t) {
@@ -161,14 +169,16 @@ export class NaturalVoice {
     const p = this.pending;
     if (!p || p.id !== m.id) return; // made for a place the reader has left
     this.pending = null;
-    const dur = m.pcm ? m.pcm.length / m.sampleRate : 0;
-    if (m.pcm) this.host.speed(dur, m.ms);
-    this.items.push({ pos: p.pos, url: m.pcm ? URL.createObjectURL(wavBlob(m.pcm, m.sampleRate)) : null, dur });
+    // no audio (a failure, or nothing to say): skipped when its turn comes
+    const pcm = m.pcm && m.pcm.length ? m.pcm : null, dur = pcm ? pcm.length / m.sampleRate : 0;
+    if (pcm) this.host.speed(dur, m.ms);
+    this.items.push({ pos: p.pos, url: pcm ? URL.createObjectURL(wavBlob(pcm, m.sampleRate)) : null, dur });
     this.next = this.host.after(p.pos);
     // waiting: go on once enough is ready (all of it at the start of a reading, so it starts at once)
     const ready = this.ready;
     if (this.waiting && this.playing && this.items[this.at + 1] && (this.at < 0 || ready >= this.target || !this.next)) this._playAt(this.at + 1);
     else if (this.waiting && !this.next && this.playing) this._advance();
+    else if (this.waiting) this.host.onChange(); // how much of the wait is done
     this._pump();
   }
   _playAt(i) {

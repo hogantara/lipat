@@ -1,5 +1,5 @@
-// The natural voice's worker. It downloads Supertonic 3 once, checks every file against its SHA-256, keeps the files in
-// IndexedDB, and turns sentences into audio off the page's thread.
+// Supertonic's speech worker. It downloads Supertonic 3 once, checks every file against its SHA-256, keeps the files in
+// IndexedDB (voice-store.js), and turns sentences into audio off the page's thread. kokoro-worker.js does the same for Kokoro.
 //
 // The model comes from npm through jsDelivr, as base64 inside small JS files (the @3sln/donki-lle-voice-multi packages,
 // a sherpa-onnx conversion of huggingface.co/Supertone/supertonic-3). The parts are read as text and decoded here;
@@ -9,6 +9,7 @@
 // Messages out: { t: 'checked', cached } { t: 'progress', done, total } { t: 'preparing' } { t: 'ready' }
 //               { t: 'audio', id, pcm (Int16Array), sampleRate, ms } { t: 'failed', id?, message } { t: 'forgotten' }
 import { Supertonic } from './supertonic.js';
+import { voiceStore, sha256 } from './voice-store.js';
 
 const ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.22.0/dist/';
 const CDN = 'https://cdn.jsdelivr.net/npm/';
@@ -28,25 +29,10 @@ const FILES = {
 const partUrl = (p) => { const [pkg, ...rest] = p.split('/'); return `${CDN}@3sln/donki-lle-voice-${pkg}@${VERSION}/${rest.join('/')}`; };
 
 // ------------------------------------------------------------ IndexedDB: one record per file
-let dbp = null;
-function idb() {
-  if (!dbp) dbp = new Promise((res, rej) => {
-    const r = indexedDB.open('lipat-voice', 1);
-    r.onupgradeneeded = () => r.result.createObjectStore('files');
-    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
-  });
-  return dbp;
-}
-const tx = (mode, fn) => idb().then(db => new Promise((res, rej) => {
-  const t = db.transaction('files', mode), req = fn(t.objectStore('files'));
-  t.oncomplete = () => res(req && req.result); t.onerror = () => rej(t.error); t.onabort = () => rej(t.error);
-}));
-const key = (f) => `${MODEL_ID}/${f}`;
-const getFile = (f) => tx('readonly', s => s.get(key(f)));
-const putFile = (f, buf) => tx('readwrite', s => s.put(buf, key(f)));
-async function cached() {
-  try { const keys = await tx('readonly', s => s.getAllKeys()); return Object.keys(FILES).every(f => keys.includes(key(f))); } catch { return false; }
-}
+const store = voiceStore(MODEL_ID, 'supertonic-');
+const getFile = (f) => store.get(f);
+const putFile = (f, buf) => store.put(f, buf);
+const cached = () => store.has(Object.keys(FILES));
 
 // ------------------------------------------------------------ download
 // base64 straight from the part's bytes into the file buffer: no 25 MB strings on the way
@@ -80,10 +66,6 @@ async function fetchPart(url, size, onBytes) {
   const head = new TextDecoder().decode(buf.subarray(0, q1 + 1));
   if (head !== 'export default "' || q2 <= q1) throw new Error('unexpected part format: ' + url);
   return buf.subarray(q1 + 1, q2);
-}
-async function sha256(buf) {
-  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', buf));
-  return Array.from(h, b => b.toString(16).padStart(2, '0')).join('');
 }
 async function download(progress) {
   const total = Object.values(FILES).reduce((n, [, , parts]) => n + parts.reduce((m, [, s]) => m + s, 0), 0);
@@ -152,6 +134,6 @@ self.onmessage = (ev) => {
     });
   } else if (m.t === 'forget') {
     tts = null; loading = null;
-    tx('readwrite', s => s.clear()).catch(() => {}).then(() => post({ t: 'forgotten' }));
+    store.forget().catch(() => {}).then(() => post({ t: 'forgotten' }));
   }
 };

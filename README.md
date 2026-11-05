@@ -46,13 +46,24 @@ Any other static HTTPS host works too, as long as its origin is added to the OAu
   being spoken. The page follows the voice until you scroll away; then the player offers "Back to the
   voice" and "Read from here".
 - Two voices, chosen the first time you listen and changed any time from the player:
-  - **Natural**: [Supertonic 3](https://github.com/supertone-inc/supertonic) by Supertone, a neural voice
-    that sounds like a person, in 31 languages including English and Indonesian, with ten speakers. It runs
+  - **Natural**: a neural voice that sounds like a person, in one of two models, each a one-time download:
+    - [Kokoro 82M](https://huggingface.co/hexgrad/Kokoro-82M) by hexgrad, for English books, with 13
+      American and British speakers. It is one of the models [AudioSmith](https://github.com/hehehai/AudioSmith)
+      runs on the Mac; Lipat runs it in the browser. Text becomes phonemes with eSpeak NG (the `phonemizer`
+      package), then one model call makes the sound. A one-time 122 MB download: onnx-community's uint8f16
+      export (on WebAssembly about 75% faster than the 92 MB q8 one) and the voice files from Hugging Face
+      at a pinned commit. It makes speech about a quarter slower than Supertonic, so the working ahead below
+      matters more. The default for English when you first pick the natural voice; readers who already have
+      Supertonic keep it until they pick a Kokoro speaker.
+    - [Supertonic 3](https://github.com/supertone-inc/supertonic) by Supertone, in 31 languages including
+      English and Indonesian, with ten speakers. Books in other languages than English always use it.
+    Pick between them in the Speaker list of the voice settings (English books list both). Each runs
     on the device in a worker with ONNX Runtime, so book text never leaves it, and plays through an audio
-    element, so it keeps reading with the screen off and shows lock-screen controls. A one-time 145 MB
-    download from jsDelivr, checked against SHA-256 sums and kept in IndexedDB. It works ahead of the
+    element, so it keeps reading with the screen off and shows lock-screen controls. Supertonic is a one-time
+    145 MB download from jsDelivr. Both are checked against SHA-256 sums and kept in IndexedDB, and each can
+    be removed on its own. It works ahead of the
     voice, uses up to four cores where the browser supports Document-Isolation-Policy (Chrome 137 and
-    later; the service worker asks for it). It picks its quality (denoising steps, 5 to 8;
+    later; the service worker asks for it). Supertonic picks its quality (denoising steps, 5 to 8;
     below 5 it sounds hissy) from how fast the device is, and the voice settings say what it runs on
     and how fast. If the device can't keep up, the player says "Preparing the next part" with how far
     along it is, gathers about a minute of speech (15 seconds on a device that keeps up), and goes on
@@ -116,8 +127,11 @@ js/app.js             shelf, import, marks view, settings, Drive sync, PWA plumb
 js/reader.js          reading surface, marks, sheets/panels, search, PDF page mode
 js/speech.js          read aloud: text for the ear, voice choice, player, highlight, Media Session
 js/natural.js         natural voice, page side: works ahead, plays through one audio element
-js/voice-worker.js    natural voice, worker side: download, checksums, IndexedDB, ONNX Runtime
+js/voice-worker.js    Supertonic worker: download, checksums, IndexedDB, ONNX Runtime
 js/supertonic.js      Supertonic 3 inference (port of the reference web helper)
+js/kokoro-worker.js   Kokoro worker: download from Hugging Face, checksums, IndexedDB, ONNX Runtime
+js/kokoro.js          Kokoro 82M inference: text normalising and phonemes (ported from kokoro-js), tokens
+js/voice-store.js     IndexedDB store for both voices' files
 js/formats.js         format detection + parsers (PDF reflow, EPUB, DOCX, MD, HTML, TXT)
 js/export.js          Markdown builders (book files, reaction files, index, download)
 js/drive.js           Google Drive client (GIS token flow, drive.file scope)
@@ -130,7 +144,8 @@ samples/              demo books
 Libraries load from cdnjs on first use: pdf.js, JSZip, mammoth, marked, DOMPurify. The natural voice
 loads ONNX Runtime Web and the Supertonic 3 model (OpenRAIL-M licence; sample code MIT) from jsDelivr only when
 chosen; the model files are the `@3sln/donki-lle-voice-multi` npm packages, a sherpa-onnx conversion of
-`Supertone/supertonic-3`. Google
+`Supertone/supertonic-3`. Kokoro (Apache-2.0) loads ONNX Runtime Web and the `phonemizer` package (eSpeak NG)
+from jsDelivr and its model files from `huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX`. Google
 Identity Services loads only when you connect Drive, and the Google Picker only when you add from Drive.
 
 ## Notes on the PDF reflow

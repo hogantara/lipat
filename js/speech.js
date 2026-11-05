@@ -1,6 +1,6 @@
-// Read aloud. Two engines read the same sentences: the natural voice (Supertonic 3, run on the device; see natural.js)
-// and the device voice (the Web Speech API: free, in every language the phone or browser speaks, but stopped by Android
-// when the screen turns off). This module prepares the text, picks the engine and voice, and runs the player.
+// Read aloud. Two engines read the same sentences: the natural voice (Kokoro 82M for English, Supertonic 3 for 31
+// languages, both run on the device; see natural.js) and the device voice (the Web Speech API: free, in every language
+// the phone or browser speaks, but stopped by Android when the screen turns off). This module prepares the text, picks the engine and voice, and runs the player.
 //
 // Natural, understandable speech comes from what the voice is given and which voice is picked:
 // - The text is cleaned for the ear. Footnote numbers, page numbers, code, ruby readings and bullets
@@ -24,8 +24,9 @@
 // Positions are character offsets into a section's textContent, like marks, so they survive the
 // <mark> and search-hit wrappers that split text nodes.
 import { db } from './db.js';
-import { NaturalVoice, NATURAL_MB } from './natural.js';
+import { NaturalVoice } from './natural.js';
 import { SUPERTONIC_LANGS, SUPERTONIC_VOICES } from './supertonic.js';
+import { KOKORO_LANGS, KOKORO_VOICES, KOKORO_DEFAULT } from './kokoro.js';
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
@@ -334,9 +335,10 @@ function hint(hasVoice) {
 }
 
 // ------------------------------------------------------------ the player
-// Two engines read the same sentences. The natural voice (Supertonic 3, natural.js) sounds like a person and keeps
-// going with the screen off; it speaks 31 languages and downloads once. The device voice (Web Speech API, below) needs
-// nothing and speaks every language the device has, but Android stops it when the screen turns off.
+// Two engines read the same sentences. The natural voice (natural.js) sounds like a person and keeps going with the
+// screen off, and downloads once. It has two models: Kokoro (kokoro.js) speaks English only, Supertonic (supertonic.js)
+// 31 languages. English books use the one the reader picks; other books use Supertonic. The device voice (Web Speech
+// API, below) needs nothing and speaks every language the device has, but Android stops it when the screen turns off.
 const RATES = [0.8, 1, 1.2, 1.5, 1.75, 2];
 export class ReadAloud {
   constructor(reader) {
@@ -347,8 +349,9 @@ export class ReadAloud {
     this.next = null;              // the next one to queue (device voice)
     this.q = [];                   // queued in the engine, oldest first: { u, pos } (device voice)
     this.gen = 0;                  // bumped on every restart; events of older utterances are ignored
-    // engine: null until the reader picks one; natural: Supertonic voice style; steps: its denoising steps, tuned to this device
-    this.prefs = { rate: 1, voices: {}, engine: null, natural: 0, steps: 6 };
+    // engine: null until the reader picks one; model: the natural voice for English books (kokoro or supertonic);
+    // natural: Supertonic voice style; steps: its denoising steps, tuned to this device; kokoro: Kokoro speaker
+    this.prefs = { rate: 1, voices: {}, engine: null, model: 'kokoro', natural: 0, steps: 6, kokoro: KOKORO_DEFAULT };
     this.badVoices = new Set();    // network voices that failed this session
     this.following = true;         // the page keeps the voice in view until the reader scrolls away from it
     this.errors = 0;
@@ -357,22 +360,32 @@ export class ReadAloud {
     this.voices = speechSynthesis.getVoices();
     onVoices(() => { this.voices = speechSynthesis.getVoices(); if (!this.pop.hidden) this._renderPop(); });
     this.ready = db.getSetting('listen', null).then(p => {
+      // readers from before Kokoro keep the Supertonic voice they have
+      if (p && p.engine && !p.model) p.model = 'supertonic';
       if (p) this.prefs = { ...this.prefs, ...p, voices: { ...(p.voices || {}) } };
       this.prefs.steps = clamp(this.prefs.steps || 6, 5, 8); // older builds went down to 3, which sounds broken
       this._syncRate();
     });
-    this.nat = new NaturalVoice({
-      seg: (pos) => this._seg(pos), after: (pos) => this._after(pos),
-      lang: () => baseOf(this.lang), voice: () => this.prefs.natural, steps: () => this.prefs.steps,
-      speed: (sec, ms) => this._tune(sec, ms),
-      // slower than the voice: gather a minute before going on, so the waits are rare
-      refill: () => this.speedSeen && this.speedSeen < this.prefs.rate * 1.05 ? 60 : 15,
-      onStart: (pos) => { if (this.state === 'playing' && !same(pos, this.cur)) this._setCurrent(pos); },
-      onEnd: () => this._finish(),
-      onChange: () => { this._ui(); if (!this.pop.hidden) this._renderPop(); },
-      onPause: () => { if (this.state === 'playing') { this.state = 'paused'; this._ui(); } },
-      onFail: (msg) => { if (this.engine === 'natural' && this.state !== 'off') { this.pause(); this.r.toast("The natural voice didn't load. Check your connection and try again.", { label: 'Details', fn: () => this.r.toast(String(msg).slice(0, 160)) }); } },
-    });
+    // one natural voice per model; only the one in use (this.nat) acts on what its worker says
+    const host = (model) => {
+      const mine = () => this.model === model;
+      return {
+        seg: (pos) => this._seg(pos), after: (pos) => this._after(pos),
+        lang: () => baseOf(this.lang), voice: () => model === 'kokoro' ? this.prefs.kokoro : this.prefs.natural, steps: () => this.prefs.steps,
+        speed: (sec, ms) => { if (mine()) this._tune(sec, ms); },
+        // slower than the voice: gather a minute before going on, so the waits are rare
+        refill: () => this.speedSeen && this.speedSeen < this.prefs.rate * 1.05 ? 60 : 15,
+        onStart: (pos) => { if (mine() && this.state === 'playing' && !same(pos, this.cur)) this._setCurrent(pos); },
+        onEnd: () => { if (mine()) this._finish(); },
+        onChange: () => { this._ui(); if (!this.pop.hidden) this._renderPop(); },
+        onPause: () => { if (mine() && this.state === 'playing') { this.state = 'paused'; this._ui(); } },
+        onFail: (msg) => { if (mine() && this.engine === 'natural' && this.state !== 'off') { this.pause(); this.r.toast("The natural voice didn't load. Check your connection and try again.", { label: 'Details', fn: () => this.r.toast(String(msg).slice(0, 160)) }); } },
+      };
+    };
+    this.models = {
+      kokoro: new NaturalVoice(host('kokoro'), 'kokoro-worker.js', 122),
+      supertonic: new NaturalVoice(host('supertonic'), 'voice-worker.js', 145),
+    };
     // a mark or search hit wraps text under the highlight: point the highlight at the new nodes
     this.observer = new MutationObserver(() => { if (this.state !== 'off') this._paint(); });
     addEventListener('pagehide', () => speechSynthesis.cancel());
@@ -395,9 +408,10 @@ export class ReadAloud {
     // the first-time choice is kept only once the reader starts with it
     $('#say-start').onclick = () => { this.prefs.engine = this._chosen || 'natural'; this._save(); this.closePop(); this.play(); };
     $('#say-remove').onclick = () => {
-      if (!confirm(`Remove the natural voice from this device? Getting it back is a ${NATURAL_MB} MB download.`)) return;
+      const n = this.nat;
+      if (!confirm(`Remove the ${this._natName()} from this device? Getting it back is a ${n.mb} MB download.`)) return;
       if (this.engine === 'natural') this.stop();
-      this.nat.forget(); this._renderPop();
+      n.forget(); this._renderPop();
     };
     $('#say-lang').onchange = (ev) => this.setLang(ev.target.value);
     $('#say-voice').onchange = (ev) => this.setVoice(ev.target.value);
@@ -408,7 +422,16 @@ export class ReadAloud {
 
   // which engine reads this book: the natural voice when chosen and it speaks the language
   get engine() { return this.prefs.engine === 'natural' && this._naturalSpeaks() ? 'natural' : 'device'; }
-  _naturalSpeaks() { return !!this.r.book && SUPERTONIC_LANGS.has(baseOf(this.r.book.speechLang || this._bookLang())); }
+  _base() { return this.r.book ? baseOf(this.r.book.speechLang || this._bookLang()) : ''; }
+  _naturalSpeaks() { const b = this._base(); return SUPERTONIC_LANGS.has(b) || KOKORO_LANGS.has(b); }
+  // which natural voice reads this book: Kokoro when picked and it speaks the language, else Supertonic
+  _kokoroSpeaks() { return KOKORO_LANGS.has(this._base()); }
+  get model() { return this.prefs.model === 'kokoro' && this._kokoroSpeaks() ? 'kokoro' : 'supertonic'; }
+  get nat() { return this.models[this.model]; }
+  // the other model lets go of its memory (it stays on the device)
+  _releaseOthers() { for (const m of Object.values(this.models)) if (m !== this.nat) m.release(); }
+  // with two models for the language, they go by name
+  _natName() { return this._kokoroSpeaks() ? `${this.model === 'kokoro' ? 'Kokoro' : 'Supertonic'} voice` : 'natural voice'; }
 
   // ---------------------------------------------------------- controls
   toggle() { if (this.state === 'playing') this.pause(); else this.play(); }
@@ -447,7 +470,7 @@ export class ReadAloud {
   stop() {
     if (this.state === 'off') return;
     this.gen++; clearTimeout(this.dog); clearTimeout(this._rt); clearTimeout(this._st); speechSynthesis.cancel();
-    this.nat.stop();
+    for (const m of Object.values(this.models)) m.stop();
     this.q = []; this.next = this.cur = this.word = this.range = null; this.state = 'off'; this.following = true; this.ended = false;
     highlight(HL, null); highlight(HL_WORD, null);
     this.closePop(); this._audio(false); this._media(false); this._ui();
@@ -456,7 +479,7 @@ export class ReadAloud {
   // a new book: forget the old one's sentences and language
   reset() { this.stop(); this.segs.clear(); this.key = null; this.detected = null; this.metaSid = null; }
   // the book closed: free the natural voice's memory (it stays on the device)
-  release() { clearTimeout(this._pt); this.nat.release(); }
+  release() { clearTimeout(this._pt); for (const m of Object.values(this.models)) m.release(); }
   // Prepare ahead: with the natural voice chosen and on the device, make speech from where the reader is whenever the
   // book is open, so listening later starts at once and doesn't wait on a slow device. Never downloads unasked.
   prepareSoon(ms = 1500) { clearTimeout(this._pt); this._pt = setTimeout(() => this._prepare(), ms); }
@@ -468,6 +491,7 @@ export class ReadAloud {
     this._setup();
     const pos = this._visiblePos();
     if (!pos) return;
+    this._releaseOthers();
     this.nat.prepare(pos);
     this.nat.load().catch(() => {});
   }
@@ -487,12 +511,31 @@ export class ReadAloud {
     this.prefs.rate = Math.round(clamp(v || 1, 0.6, 2.5) * 100) / 100;
     this._save(); this._syncRate(); this._ui();
     // the natural voice changes speed at once; the device voice says the sentence again at the new speed
-    this.nat.setRate(this.prefs.rate);
+    for (const m of Object.values(this.models)) m.setRate(this.prefs.rate);
     clearTimeout(this._rt);
     if (this.state === 'playing' && this.engine === 'device') this._rt = setTimeout(() => { if (this.state === 'playing') { this._setup(); this._playFrom(this.cur || this.next); } }, 400);
   }
   setVoice(v) {
-    if (this.engine === 'natural') { this.prefs.natural = Number(v) || 0; this._save(); this._apply(true); return; }
+    if (this.engine === 'natural') {
+      // k:<Kokoro speaker> or s:<Supertonic style>. Picking a Supertonic one in another language keeps Kokoro for English.
+      const [m, id] = String(v).split(':'), was = this.model;
+      if (m === 'k') { this.prefs.kokoro = id; this.prefs.model = 'kokoro'; } else {
+        this.prefs.natural = Number(id) || 0;
+        if (this._kokoroSpeaks()) this.prefs.model = 'supertonic';
+      }
+      this._save();
+      if (this.model === was) { this._apply(true); return; }
+      // the other model learns its own speed on this device. Not on the device yet: listening pauses and the sheet
+      // offers its download, rather than a 100 MB download starting from a speaker list.
+      this.speedSeen = this.rtf = null;
+      this._releaseOthers();
+      this.nat.check().then(has => {
+        if (!has && this.state !== 'off') { this.pause(); this._setup(); this._renderPop(); return; }
+        this._apply(true);
+        if (this.state !== 'off' && this.nat.status !== 'ready') this.nat.load().catch(() => {});
+      });
+      return;
+    }
     const b = baseOf(this.lang || this._bookLang());
     if (v) this.prefs.voices[b] = v; else delete this.prefs.voices[b];
     this._save(); this._apply();
@@ -534,6 +577,7 @@ export class ReadAloud {
     const rtf = sec * 1000 / ms, need = this.prefs.rate * 1.25;
     this.rtf = this.rtf ? this.rtf * 0.6 + rtf * 0.4 : rtf;
     this.speedSeen = this.rtf;
+    if (this.model !== 'supertonic') return; // Kokoro has no steps to trade
     let s = this.prefs.steps;
     // below 5 steps the voice turns hissy and broken: never go there
     if (this.rtf < need && s > 5) s--;
@@ -659,7 +703,7 @@ export class ReadAloud {
     speechSynthesis.cancel();
     this.q = []; this.next = pos; this.state = 'playing'; this.lastEvent = Date.now(); this.ended = false;
     this._setCurrent(pos, jump);
-    if (this.engine === 'natural') { clearTimeout(this.dog); this.nat.setRate(this.prefs.rate); this.nat.play(pos, { fresh }); this._ui(); return; }
+    if (this.engine === 'natural') { clearTimeout(this.dog); this._releaseOthers(); this.nat.setRate(this.prefs.rate); this.nat.play(pos, { fresh }); this._ui(); return; }
     this._ui();
     const go = () => { if (gen === this.gen) { this._fill(); this._watch(); } };
     // some engines drop a speak() that comes straight after cancel()
@@ -891,17 +935,21 @@ export class ReadAloud {
     if (!this.voices.length) this.voices = speechSynthesis.getVoices();
     const first = !this.prefs.engine, choice = first ? (this._chosen || 'natural') : this.prefs.engine;
     const auto = baseOf(this._bookLang()), lang = book.speechLang || this._bookLang(), base = baseOf(lang);
-    const speaks = SUPERTONIC_LANGS.has(base), n = this.nat, natural = choice === 'natural' && speaks;
+    const speaks = SUPERTONIC_LANGS.has(base) || KOKORO_LANGS.has(base), n = this.nat, natural = choice === 'natural' && speaks;
+    if (n.status === 'unknown') n.check().then(() => { if (!this.pop.hidden) this._renderPop(); });
+    const MB = n.mb, both = KOKORO_LANGS.has(base), kokoro = this.model === 'kokoro';
+    // with two models for the language, say which one this is
+    const like = !both ? 'Sounds like a person' : kokoro ? 'Kokoro, an English voice. Sounds like a person' : 'Supertonic, a voice for 31 languages. Sounds like a person';
     // engine
     $$('#say-engine button').forEach(b => { const on = b.dataset.v === choice; b.classList.toggle('is-active', on); b.setAttribute('aria-checked', String(on)); });
     const has = n.status === 'stored' || n.status === 'ready' || n.status === 'preparing';
     const about = choice === 'device' ? 'Uses the voices built into this device. Starts at once. On Android it stops when the screen turns off.'
       : !speaks ? `The natural voice doesn't speak ${langName(base)} yet. This book uses the device voice.`
-      : n.status === 'downloading' ? `Downloading, ${Math.round(n.progress * NATURAL_MB)} of ${NATURAL_MB} MB. You can keep reading.`
+      : n.status === 'downloading' ? `Downloading, ${Math.round(n.progress * MB)} of ${MB} MB. You can keep reading.`
       : n.status === 'failed' ? "The download didn't finish. Check your connection and try again."
-      : n.status === 'ready' ? `Sounds like a person and keeps reading with the screen off. Stored on this device. ${this._perf()}`.trim()
-      : has ? 'Sounds like a person and keeps reading with the screen off. Stored on this device.'
-      : `Sounds like a person and keeps reading with the screen off. A one-time ${NATURAL_MB} MB download.`;
+      : n.status === 'ready' ? `${like} and keeps reading with the screen off. Stored on this device. ${this._perf()}`.trim()
+      : has ? `${like} and keeps reading with the screen off. Stored on this device.`
+      : `${like} and keeps reading with the screen off. A one-time ${MB} MB download.`;
     $('#say-about').textContent = about;
     const meter = $('#say-dl');
     meter.hidden = !(choice === 'natural' && n.status === 'downloading');
@@ -909,8 +957,10 @@ export class ReadAloud {
     // download: offered in place unless the first-time button below does it
     const get = $('#say-get');
     get.hidden = first || !natural || has || n.status === 'downloading' || n.status === 'unknown';
-    $('span', get).textContent = n.status === 'failed' ? 'Try again' : `Download, ${NATURAL_MB} MB`;
-    $('#say-remove').hidden = first || !has;
+    $('span', get).textContent = n.status === 'failed' ? 'Try again' : `Download, ${MB} MB`;
+    const remove = $('#say-remove');
+    remove.hidden = first || !has;
+    remove.textContent = `Remove ${this._natName()}`;
     const start = $('#say-start');
     start.hidden = !first;
     start.textContent = natural && !has ? `Download and listen` : 'Start listening';
@@ -918,8 +968,10 @@ export class ReadAloud {
     const vs = $('#say-voice'), vrow = vs.closest('.row');
     vrow.hidden = first;
     if (natural) {
-      vs.innerHTML = SUPERTONIC_VOICES.map((v, i) => `<option value="${i}">${v[0] === 'F' ? 'Female' : 'Male'} ${v.slice(1)}</option>`).join('');
-      vs.value = String(this.prefs.natural); vs.disabled = false;
+      const st = SUPERTONIC_VOICES.map((v, i) => `<option value="s:${i}">${v[0] === 'F' ? 'Female' : 'Male'} ${v.slice(1)}</option>`).join('');
+      const kk = (region) => KOKORO_VOICES.filter(([id]) => id[0] === region).map(([id, name]) => `<option value="k:${id}">${name}, ${id[1] === 'f' ? 'female' : 'male'}</option>`).join('');
+      vs.innerHTML = both ? `<optgroup label="Kokoro, US English">${kk('a')}</optgroup><optgroup label="Kokoro, UK English">${kk('b')}</optgroup><optgroup label="Supertonic">${st}</optgroup>` : st;
+      vs.value = kokoro ? `k:${this.prefs.kokoro}` : `s:${this.prefs.natural}`; vs.disabled = false;
     } else {
       const ranked = rankVoices(this.voices.filter(v => !this.badVoices.has(v.voiceURI)), lang);
       // the region, when the voices differ in it and the name doesn't say
